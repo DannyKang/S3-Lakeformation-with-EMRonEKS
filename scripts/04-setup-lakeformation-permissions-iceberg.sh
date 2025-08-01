@@ -285,6 +285,7 @@ for role in "${ROLES[@]}"; do
     if PERMISSIONS=$(aws lakeformation list-permissions \
         --region $REGION \
         --principal DataLakePrincipalIdentifier=$role_arn \
+        --resource "Database={Name=${DATABASE_NAME}}" \
         --max-results 10 \
         --query 'PrincipalResourcePermissions[*].{Resource:Resource,Permissions:Permissions}' \
         --output json 2>/dev/null); then

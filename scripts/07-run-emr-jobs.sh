@@ -34,8 +34,8 @@ echo ""
 
 # Job 설정 (Lake Formation FGAC 역할 매핑)
 JOB_CONFIGS=(
-    "data-steward:emr-data-steward-sa:$LF_DATA_STEWARD_ROLE:전체 데이터 분석 (100,000건)"
-    #"gangnam-analytics:emr-gangnam-analytics-sa:$LF_GANGNAM_ANALYTICS_ROLE:강남구 데이터 분석 (~3,000건)"
+    "data-steward:emr-data-steward-sa:$LF_DATA_STEWARD_ROLE:데이터 스튜어드 전체 데이터 분석 (100,000건)"
+    "gangnam-analytics:emr-gangnam-analytics-sa:$LF_GANGNAM_ANALYTICS_ROLE:강남구 데이터 분석 (~3,000건)"
     #"operation:emr-operation-sa:$LF_OPERATION_ROLE:운영 데이터 분석 (개인정보 제외)"
     #"marketing-partner:emr-marketing-partner-sa:$LF_MARKETING_PARTNER_ROLE:마케팅 타겟 분석 (강남구 20-30대)"
 )
@@ -83,7 +83,7 @@ create_job_template() {
       {
         "classification": "spark-defaults",
         "properties": {
-          "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+          "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,com.amazonaws.emr.recordserver.connector.spark.sql.RecordServerSQLExtension",
           "spark.sql.catalog.glue_catalog": "org.apache.iceberg.spark.SparkCatalog",
           "spark.sql.catalog.glue_catalog.catalog-impl": "org.apache.iceberg.aws.glue.GlueCatalog",
           "spark.sql.catalog.glue_catalog.warehouse": "s3://${ICEBERG_BUCKET_NAME}/",
@@ -95,6 +95,16 @@ create_job_template() {
           "spark.hadoop.fs.s3.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
           "spark.hadoop.aws.region": "$REGION",
           "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
+          "spark.sql.catalog.glue_catalog.client.region": "$REGION",
+          "spark.hadoop.hive.metastore.glue.region": "$REGION",
+          "spark.sql.catalog.glue_catalog.lake-formation.enabled": "true",
+          "spark.sql.catalog.glue_catalog.lf.managed": "true",
+          "spark.sql.secureCatalog": "glue_catalog",
+          "spark.sql.catalog.glue_catalog.glue.account-id": "$ACCOUNT_ID",
+          "spark.hadoop.iceberg.mr.catalog": "glue_catalog",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.catalog-impl": "org.apache.iceberg.aws.glue.GlueCatalog",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.warehouse": "s3://${ICEBERG_BUCKET_NAME}/",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
           "spark.executor.instances": "2",
           "spark.executor.memory": "1g",
           "spark.executor.cores": "1",
@@ -119,7 +129,7 @@ create_job_template() {
     "JobType": "LakeFormationFGAC",
     "Role": "${role_name}",
     "Namespace": "$USER_NAMESPACE",
-    "CatalogType": "S3Tables"
+    "CatalogType": "Glue"
   }
 }
 EOF

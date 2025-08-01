@@ -10,16 +10,9 @@ from pyspark.sql.types import *
 import sys
 
 def create_spark_session():
-    """S3 Tables(Iceberg) 지원 Spark 세션 생성"""
-    import os
-    table_bucket = os.getenv('TABLE_BUCKET_NAME', 'seoul-bike-demo-2025')
-    
+    """Iceberg 지원 Spark 세션 생성"""
     return SparkSession.builder \
         .appName("GangnamAnalytics-RegionalAccess-Analysis") \
-        .config("spark.sql.catalog.s3tables_catalog", "org.apache.iceberg.spark.SparkCatalog") \
-        .config("spark.sql.catalog.s3tables_catalog.catalog-impl", "org.apache.iceberg.aws.s3.S3TablesCatalog") \
-        .config("spark.sql.catalog.s3tables_catalog.warehouse", f"s3://{table_bucket}/") \
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .getOrCreate()
 
 def main():
@@ -29,16 +22,15 @@ def main():
     spark = create_spark_session()
     
     try:
-        # S3 Tables에서 데이터 읽기
-        print("\n1. S3 Tables에서 데이터 로드 중...")
-        spark_conf = spark.sparkContext.getConf()
-        namespace = spark_conf.get('spark.app.s3tables.namespace', 'bike_db')
-        table_name = spark_conf.get('spark.app.s3tables.table', 'bike_rental_data')
+        # Glue 카탈로그에서 Iceberg 테이블 데이터 읽기
+        print("\n1. Glue 카탈로그에서 데이터 로드 중...")
+        namespace = 'bike_db'
+        table_name = 'bike_rental_data'
         
         print(f"   네임스페이스: {namespace}")
         print(f"   테이블명: {table_name}")
         
-        df = spark.read.table(f"s3tables_catalog.{namespace}.{table_name}")
+        df = spark.table(f"{namespace}.{table_name}")
         
         total_records = df.count()
         print(f"✅ Lake Formation 필터링 후 레코드 수: {total_records:,}건")

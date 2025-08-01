@@ -1,0 +1,51 @@
+{
+  "name": "simple-test-20250731",
+  "virtualClusterId": "7dlgy73tgo4b17nbyj3rhxtsq",
+  "executionRoleArn": "arn:aws:iam::110230268220:role/LF_DataStewardRole",
+  "releaseLabel": "emr-7.7.0-latest",
+  "jobDriver": {
+    "sparkSubmitJobDriver": {
+      "entryPoint": "s3://seoul-bike-analytics-scripts-110230268220/spark-jobs/simple-test.py",
+      "sparkSubmitParameters": "--conf spark.executor.instances=1 --conf spark.executor.memory=1g --conf spark.executor.cores=1 --conf spark.driver.cores=1 --conf spark.driver.memory=1g"
+    }
+  },
+  "configurationOverrides": {
+    "applicationConfiguration": [
+      {
+        "classification": "spark-defaults",
+        "properties": {
+          "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+          "spark.sql.catalog.spark_catalog": "org.apache.iceberg.spark.SparkSessionCatalog",
+          "spark.sql.catalog.spark_catalog.type": "hive",
+          "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.WebIdentityTokenCredentialsProvider",
+          "spark.hadoop.aws.credentials.provider": "com.amazonaws.auth.WebIdentityTokenCredentialsProvider",
+          "spark.hadoop.fs.s3a.endpoint.region": "ap-northeast-2",
+          "spark.hadoop.fs.s3.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
+          "spark.hadoop.aws.region": "ap-northeast-2",
+          "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
+          "spark.executor.instances": "1",
+          "spark.executor.memory": "1g",
+          "spark.executor.cores": "1",
+          "spark.driver.memory": "1g",
+          "spark.driver.cores": "1"
+        }
+      }
+    ],
+    "monitoringConfiguration": {
+      "persistentAppUI": "ENABLED",
+      "cloudWatchMonitoringConfiguration": {
+        "logGroupName": "/aws/emr-containers/jobs",
+        "logStreamNamePrefix": "simple-test"
+      },
+      "s3MonitoringConfiguration": {
+        "logUri": "s3://seoul-bike-analytics-results-110230268220/logs/"
+      }
+    }
+  },
+  "tags": {
+    "LakeFormationAuthorizedCaller": "EMRonEKSEngine",
+    "JobType": "SimpleTest",
+    "Role": "LF_DataStewardRole",
+    "Namespace": "emr-data-team"
+  }
+}

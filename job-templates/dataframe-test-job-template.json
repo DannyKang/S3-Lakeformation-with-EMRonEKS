@@ -1,11 +1,11 @@
 {
-  "name": "seoul-bike-marketing-partner-20250731-231941",
+  "name": "seoul-bike-dataframe-test-20250731-165652",
   "virtualClusterId": "k9sm3l3x4udl1ndyy8fvbwssv",
-  "executionRoleArn": "arn:aws:iam::110230268220:role/LF_MarketingPartnerRole",
+  "executionRoleArn": "arn:aws:iam::110230268220:role/LF_DataStewardRole",
   "releaseLabel": "emr-7.7.0-latest",
   "jobDriver": {
     "sparkSubmitJobDriver": {
-      "entryPoint": "s3://seoul-bike-analytics-scripts-110230268220/spark-jobs/marketing-partner-analysis.py",
+      "entryPoint": "s3://seoul-bike-analytics-scripts-110230268220/spark-jobs/dataframe-test-analysis.py",
       "sparkSubmitParameters": "--conf spark.executor.instances=2 --conf spark.executor.memory=1g --conf spark.executor.cores=1 --conf spark.driver.cores=1 --conf spark.driver.memory=1g"
     }
   },
@@ -45,7 +45,7 @@
       "persistentAppUI": "ENABLED",
       "cloudWatchMonitoringConfiguration": {
         "logGroupName": "/aws/emr-containers/jobs",
-        "logStreamNamePrefix": "marketing-partner"
+        "logStreamNamePrefix": "dataframe-test"
       },
       "s3MonitoringConfiguration": {
         "logUri": "s3://seoul-bike-analytics-results-110230268220/logs/"
@@ -55,8 +55,8 @@
   "tags": {
     "LakeFormationAuthorizedCaller": "EMRonEKSEngine",
     "JobType": "LakeFormationFGAC",
-    "Role": "LF_MarketingPartnerRole",
+    "Role": "LF_DataStewardRole",
     "Namespace": "emr-data-team",
-    "CatalogType": "GlueCatalog"
+    "CatalogType": "S3Tables"
   }
 }

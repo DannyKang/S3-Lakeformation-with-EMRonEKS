@@ -78,7 +78,9 @@ cat > /tmp/base-policy.json << EOF
                 "lakeformation:StartQueryPlanning",
                 "lakeformation:GetWorkUnitResults",
                 "lakeformation:GetQueryState",
-                "lakeformation:GetQueryStatistics"
+                "lakeformation:GetQueryStatistics",
+                "lakeformation:GetTemporaryGlueTableCredentials",
+                "lakeformation:GetTemporaryGluePartitionCredentials"
             ],
             "Resource": "*"
         },
@@ -102,7 +104,10 @@ cat > /tmp/base-policy.json << EOF
                 "glue:GetTable",
                 "glue:GetTables",
                 "glue:GetPartition",
-                "glue:GetPartitions"
+                "glue:GetPartitions",
+                "glue:GetUnfilteredTableMetadata",
+                "glue:GetUnfilteredPartitionMetadata",
+                "glue:GetUnfilteredPartitionsMetadata"
             ],
             "Resource": "*"
         },
@@ -189,8 +194,6 @@ LF_GANGNAM_ANALYTICS_ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/LF_GangnamAnalyticsR
 LF_OPERATION_ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/LF_OperationRole
 LF_MARKETING_PARTNER_ROLE_ARN=arn:aws:iam::$ACCOUNT_ID:role/LF_MarketingPartnerRole
 
-# EMR 서비스 역할 (04단계에서 생성됨)
-EMR_EKS_SERVICE_ROLE=EMRContainers-JobExecutionRole
 EOF
 
     echo "   ✅ 환경 변수 파일 업데이트 완료"

@@ -1,0 +1,20 @@
+{
+  "name": "minimal-test-20250731",
+  "virtualClusterId": "7dlgy73tgo4b17nbyj3rhxtsq",
+  "executionRoleArn": "arn:aws:iam::110230268220:role/LF_DataStewardRole",
+  "releaseLabel": "emr-7.7.0-latest",
+  "jobDriver": {
+    "sparkSubmitJobDriver": {
+      "entryPoint": "s3://seoul-bike-analytics-scripts-110230268220/spark-jobs/simple-test.py"
+    }
+  },
+  "configurationOverrides": {
+    "monitoringConfiguration": {
+      "persistentAppUI": "ENABLED",
+      "cloudWatchMonitoringConfiguration": {
+        "logGroupName": "/aws/emr-containers/jobs",
+        "logStreamNamePrefix": "minimal-test"
+      }
+    }
+  }
+}

@@ -10,7 +10,7 @@ from pyspark.sql.types import *
 import sys
 
 def create_spark_session():
-    """S3 Tables Lake Formation FGAC 지원 Spark 세션 생성"""
+    """Lake Formation FGAC 지원 Spark 세션 생성"""
     return SparkSession.builder \
         .appName("DataSteward-FullAccess-Analysis") \
         .getOrCreate()
@@ -22,17 +22,17 @@ def main():
     spark = create_spark_session()
     
     try:
-        # S3 Tables Lake Formation FGAC를 통해 데이터 읽기
-        print("\n1. S3 Tables Lake Formation FGAC를 통해 데이터 로드 중...")
+        # Lake Formation FGAC를 통해 데이터 읽기
+        print("\n1. Lake Formation FGAC를 통해 데이터 로드 중...")
         namespace = "bike_db"
         table_name = "bike_rental_data"
         
         print(f"   네임스페이스: {namespace}")
         print(f"   테이블명: {table_name}")
-        print(f"   카탈로그: {namespace}.{table_name} (Glue Catalog with Iceberg JAR)")
+        print(f"   카탈로그: glue_catalog.{namespace}.{table_name} (Glue Catalog with Iceberg)")
         
-        # Hive 메타스토어를 통해 Iceberg 테이블 데이터 읽기
-        df = spark.table(f"{namespace}.{table_name}")
+        # Glue 카탈로그를 명시적으로 지정하여 Iceberg 테이블 데이터 읽기
+        df = spark.table(f"glue_catalog.{namespace}.{table_name}")
         
         total_records = df.count()
         print(f"✅ 총 레코드 수: {total_records:,}건")
@@ -70,11 +70,11 @@ def main():
         # 연령대별 분포 (개인정보 접근 가능)
         print(f"\n6. 연령대별 분포:")
         age_group_df = df.withColumn("age_group", 
-                                   when(col("birth_year") >= 2005, "10대")
-                                   .when(col("birth_year") >= 1995, "20대")
-                                   .when(col("birth_year") >= 1985, "30대")
-                                   .when(col("birth_year") >= 1975, "40대")
-                                   .when(col("birth_year") >= 1965, "50대")
+                                   when(col("birth_year") >= "2005", "10대")
+                                   .when(col("birth_year") >= "1995", "20대")
+                                   .when(col("birth_year") >= "1985", "30대")
+                                   .when(col("birth_year") >= "1975", "40대")
+                                   .when(col("birth_year") >= "1965", "50대")
                                    .otherwise("60대+"))
         
         age_stats = age_group_df.groupBy("age_group") \
@@ -107,14 +107,19 @@ def main():
         
         distance_stats.show()
         
-        # 시간대별 이용 패턴
+        # 시간대별 이용 패턴 (rental_date가 string이므로 파싱 필요)
         print(f"\n9. 시간대별 이용 패턴:")
-        hourly_pattern = df.withColumn("hour", hour("rental_date")) \
-                           .groupBy("hour") \
-                           .count() \
-                           .orderBy("hour")
-        
-        hourly_pattern.show(24)
+        try:
+            # rental_date를 timestamp로 변환 시도
+            hourly_pattern = df.withColumn("rental_timestamp", to_timestamp(col("rental_date"), "yyyy-MM-dd HH:mm:ss")) \
+                               .withColumn("hour", hour("rental_timestamp")) \
+                               .groupBy("hour") \
+                               .count() \
+                               .orderBy("hour")
+            
+            hourly_pattern.show(24)
+        except Exception as e:
+            print(f"   시간대별 분석 스킵 (날짜 형식 문제): {e}")
         
         # 데이터 품질 검증
         print(f"\n10. 데이터 품질 검증:")
@@ -142,7 +147,7 @@ def main():
         print(f"✅ 분석 완료: {total_records:,}건")
         print(f"🔑 권한: 전체 데이터 접근 (개인정보 포함)")
         print(f"📊 역할: 데이터 품질 관리 및 거버넌스")
-        print(f"🗂️ 카탈로그: S3 Tables (s3tablesbucket)")
+        print(f"🗂️ 카탈로그: Glue Catalog (glue_catalog)")
         
     except Exception as e:
         print(f"❌ 오류 발생: {e}")

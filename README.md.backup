@@ -9,16 +9,36 @@
 
 ## 🏗️ 아키텍처 개요
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Data Source   │    │   S3 Iceberg    │    │ Lake Formation  │    │   EMR on EKS    │
-│                 │    │                 │    │                 │    │                 │
-│ seoul-bike-     │───▶│ seoul-bike-     │───▶│ FGAC Policies   │───▶│ DataSteward     │
-│ sample-100k.csv │    │ iceberg-bucket  │    │ Row Filters     │    │ GangnamAnalyst  │
-│ 100,000 records │    │ Apache Iceberg  │    │ Column Filters  │    │ Operation       │
-│                 │    │ bike_db.bike_   │    │ Cell Filters    │    │ MarketingPartner│
-│                 │    │ rental_data     │    │                 │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+```mermaid
+graph TB
+    subgraph "Data Source"
+        CSV["seoul-bike-sample-100k.csv<br/>100,000 records"]
+    end
+    
+    subgraph "S3 Iceberg"
+        ST["seoul-bike-iceberg-{ACCOUNT_ID}<br/>Apache Iceberg Format<br/>bike_db.bike_rental_data"]
+    end
+    
+    subgraph "Lake Formation"
+        LF["FGAC Policies"]
+        RF["Row Filters"]
+        CF["Column Filters"]
+        CF2["Cell Filters"]
+    end
+    
+    subgraph "EMR on EKS"
+        DS["DataSteward Role"]
+        GA["GangnamAnalyst Role"]
+        OP["Operation Role"]
+        MP["Marketing Partner Role"]
+    end
+    
+    CSV --> ST
+    ST --> LF
+    LF --> DS
+    LF --> GA
+    LF --> OP
+    LF --> MP
 ```
 
 ## 📊 실제 데이터 현황
@@ -70,10 +90,10 @@
 #### 1. **Row-level Security (행 수준 보안)**
 ```sql
 -- 강남구 데이터만 접근
-WHERE district = 강남구
+WHERE district = '강남구'
 
 -- 강남구 + 20-30대만 접근  
-WHERE district = 강남구 AND (birth_year >= 1994 AND birth_year <= 2004)
+WHERE district = '강남구' AND (birth_year >= 1994 AND birth_year <= 2004)
 ```
 
 #### 2. **Column-level Security (컬럼 수준 보안)**
@@ -104,19 +124,20 @@ MarketingPartner: 10개 컬럼 (birth_year 제외)
 ### 사전 준비사항
 
 ```bash
-# 1. AWS CLI 설정 (ap-northeast-2 리전 사용)
+# 1. 프로젝트 클론
+git clone https://github.com/DannyKang/S3-Tables-LakeFormation-with-EMRonEKS
+cd S3-Tables-LakeFormation-with-EMRonEKS
+
+# 2. AWS CLI 설정 (ap-northeast-2 리전 사용)
 aws configure set region ap-northeast-2
 
-# 2. 필요한 Python 패키지 설치
+# 3. 필요한 Python 패키지 설치
 pip install boto3 pandas matplotlib seaborn
-
-# 3. 권한 확인
-aws sts get-caller-identity
 ```
 
 ⚠️ **중요**: 
 - 모든 스크립트는 프로젝트 루트 디렉토리에서 실행해야 합니다
-- 스크립트는 **순서대로** 실행해야 합니다 (01 → 02 → 03 → 04 → 05 → 06 → 07 → 08)
+- 스크립트는 **순서대로** 실행해야 합니다 (01 → 02 → 03 → 04 → 05 → 06 → 07)
 - 각 단계 완료 후 다음 단계로 진행하세요
 
 ---
@@ -167,18 +188,18 @@ aws sts get-caller-identity
 - **LF_OperationRole**: 운영팀 - 운영 데이터만  
 - **LF_MarketingPartnerRole**: 마케팅 파트너 - 강남구 20-30대만
 
-### 4단계: Lake Formation 기본 권한 설정
+### 4단계: Lake Formation FGAC 권한 설정
 
 ```bash
-# Lake Formation 기본 권한 설정 (Iceberg)
+# Lake Formation FGAC 권한 설정
 ./scripts/04-setup-lakeformation-permissions-iceberg.sh
 ```
 
 **설정되는 권한**:
 - **Database 권한**: bike_db 데이터베이스 접근 권한
 - **Table 권한**: bike_rental_data 테이블 기본 권한
-- **Data Location 권한**: S3 Iceberg 버킷 접근 권한
-- **Column 권한**: 역할별 컬럼 접근 권한
+- **Data Cells Filter**: 역할별 행/컬럼 필터 생성
+- **Location 권한**: S3 Iceberg 버킷 접근 권한
 
 ### 5단계: EMR on EKS 클러스터 설정
 
@@ -196,25 +217,11 @@ aws sts get-caller-identity
 
 **예상 소요 시간**: 15-20분
 
-### 6단계: Lake Formation FGAC 고급 설정
-
-```bash
-# Lake Formation FGAC 고급 설정 (EMR on EKS 통합)
-./scripts/06-setup-lake-formation-fgac.sh
-```
-
-**설정되는 고급 기능**:
-- **Application Integration Settings**: 외부 엔진 허용 설정
-- **EKS RBAC 권한**: EMR Containers ClusterRole 및 ClusterRoleBinding
-- **IAM 역할 고급 설정**: Query Engine Role, Job Execution Role
-- **Security Configuration**: Lake Formation FGAC 보안 구성
-- **Virtual Cluster**: FGAC 활성화된 가상 클러스터
-
-### 7단계: 분석 Job 실행
+### 6단계: 분석 Job 실행
 
 ```bash
 # 역할별 EMR on EKS Job 실행
-./scripts/07-run-emr-jobs.sh
+./scripts/06-run-emr-jobs.sh
 ```
 
 **실행되는 분석 Job**:
@@ -232,11 +239,11 @@ aws emr-containers list-job-runs --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --reg
 aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --id {JOB_ID} --region ap-northeast-2
 ```
 
-### 8단계: 결과 검증 및 분석
+### 7단계: 결과 검증 및 분석
 
 ```bash
 # 권한 검증 및 결과 분석
-./scripts/08-verify-and-analyze.sh
+./scripts/07-verify-and-analyze.sh
 ```
 
 **검증 내용**:
@@ -244,37 +251,20 @@ aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --
 - **결과 분석**: Job 실행 결과 및 성능 분석
 - **리포트 생성**: 역할별 분석 결과 요약
 
-### 9단계: 리소스 정리 (선택사항)
-
-```bash
-# 전체 리소스 정리
-./scripts/10-cleanup-all-resources.sh
-```
-
-**정리되는 리소스**:
-- EMR on EKS Virtual Cluster 및 Job
-- EKS 클러스터 및 관련 리소스
-- Lake Formation 권한 및 설정
-- IAM 역할 및 정책
-- S3 버킷 및 데이터
-
 ## 📁 프로젝트 구조
 
 ```
-s3-lake-formation-fgac-demo/
+lake-formation-fgac-demo/
 ├── README.md                                    # 프로젝트 가이드
-├── docs/                                        # 문서
-│   └── architecture.md                          # 아키텍처 상세 설명
-├── scripts/                                     # 실행 스크립트 (8단계)
+├── data-dictionary.md                           # 데이터 사전
+├── scripts/                                     # 실행 스크립트 (7단계)
 │   ├── 01-create-s3-bucket.sh                  # S3 Iceberg 버킷 생성
 │   ├── 02-load-data-to-iceberg.sh              # 데이터 적재
 │   ├── 03-create-iam-roles.sh                  # IAM 역할 생성
-│   ├── 04-setup-lakeformation-permissions-iceberg.sh # Lake Formation 기본 권한
+│   ├── 04-setup-lakeformation-permissions-iceberg.sh # Lake Formation FGAC 권한
 │   ├── 05-setup-emr-on-eks.sh                  # EMR on EKS 설정
-│   ├── 06-setup-lake-formation-fgac.sh         # Lake Formation FGAC 고급 설정
-│   ├── 07-run-emr-jobs.sh                      # Job 실행
-│   ├── 08-verify-and-analyze.sh                # 검증 및 분석
-│   └── 10-cleanup-all-resources.sh             # 리소스 정리
+│   ├── 06-run-emr-jobs.sh                      # Job 실행
+│   └── 07-verify-and-analyze.sh                # 검증 및 분석
 ├── spark-jobs/                                 # Spark 분석 코드 (4개 역할)
 │   ├── data-steward-analysis.py                # 데이터 관리자 분석
 │   ├── gangnam-analytics-analysis.py           # 강남구 분석가 분석
@@ -286,6 +276,7 @@ s3-lake-formation-fgac-demo/
 │   └── data-dictionary.md                      # 데이터 사전
 ├── job-templates/                              # EMR Job 템플릿 (실행 시 생성)
 ├── pod-templates/                              # Pod 템플릿 (실행 시 생성)
+├── docs/                                       # 문서
 └── results/                                    # 분석 결과 (실행 후 생성)
 ```
 
@@ -344,7 +335,7 @@ s3-lake-formation-fgac-demo/
 
 ### 3. 확장 가능한 아키텍처
 - EMR on EKS의 Kubernetes 기반 확장성
-- S3 Iceberg의 Apache Iceberg 최적화
+- S3 Tables의 Apache Iceberg 최적화
 - Lake Formation의 중앙집중식 권한 관리
 
 ### 4. 실제 데이터 활용
@@ -393,15 +384,6 @@ echo $LF_VIRTUAL_CLUSTER_ID
 
 # Job 목록 확인
 aws emr-containers list-job-runs --virtual-cluster-id $LF_VIRTUAL_CLUSTER_ID
-```
-
-#### 4. Lake Formation 권한 확인
-```bash
-# Lake Formation 권한 목록 확인
-aws lakeformation list-permissions --region ap-northeast-2
-
-# 특정 역할의 권한 확인
-aws lakeformation list-permissions --region ap-northeast-2 --principal DataLakePrincipalIdentifier=arn:aws:iam::ACCOUNT_ID:role/LF_DataStewardRole
 ```
 
 ## 📚 추가 리소스

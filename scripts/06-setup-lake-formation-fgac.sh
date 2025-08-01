@@ -26,26 +26,23 @@ echo ""
 # Lake Formation 설정 변수
 LF_SESSION_TAG_VALUE="EMRonEKSEngine"
 SYSTEM_NAMESPACE="emr-system"
-# 실제 존재하는 EMR 네임스페이스 찾기
-USER_NAMESPACE=$(kubectl get namespaces -o name | grep -E "emr-data-team" | head -1 | cut -d'/' -f2)
-if [ -z "$USER_NAMESPACE" ]; then
-    USER_NAMESPACE="$EMR_NAMESPACE"  # .env에서 가져온 네임스페이스 사용
-fi
+USER_NAMESPACE="emr-data-team" 
 
 # 네임스페이스가 없으면 생성
 if ! kubectl get namespace $USER_NAMESPACE >/dev/null 2>&1; then
     echo "네임스페이스 $USER_NAMESPACE 생성 중..."
     kubectl create namespace $USER_NAMESPACE
 fi
-QUERY_EXECUTION_ROLE_NAME="LF_QueryExecutionRole"  # System Driver용 (AWS 문서 기준)
-QUERY_ENGINE_ROLE_NAME="LF_QueryEngineRole"        # System Executor용 (AWS 문서 기준)
+
+JOB_EXECUTION_ROLE_NAME="LF_JobExecutionRole"  # User Profile용 (AWS 문서 기준)
+QUERY_ENGINE_ROLE_NAME="LF_QueryEngineRole"        # System Profile용 (AWS 문서 기준)
 SECURITY_CONFIG_NAME="seoul-bike-lf-security-config"
 
 echo "Lake Formation 설정:"
 echo "• Session Tag Value: $LF_SESSION_TAG_VALUE"
 echo "• System Namespace: $SYSTEM_NAMESPACE"
 echo "• User Namespace: $USER_NAMESPACE"
-echo "• Query Execution Role (System Driver): $QUERY_EXECUTION_ROLE_NAME"
+echo "• Job Execution Role (System Driver): $JOB_EXECUTION_ROLE_NAME"
 echo "• Query Engine Role (System Executor): $QUERY_ENGINE_ROLE_NAME"
 echo ""
 
@@ -162,111 +159,11 @@ echo "   ✅ EKS RBAC 권한 설정 완료"
 echo ""
 echo "3. IAM 역할 설정..."
 
-# Query Execution Role 생성 (System Driver용)
-echo "   Query Execution Role (System Driver용) 생성 중..."
 
-# Query Execution Role Trust Policy
-cat > /tmp/query-execution-trust-policy.json << EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Service": "emr-containers.amazonaws.com"
-            },
-            "Action": "sts:AssumeRole"
-        },
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Federated": "$OIDC_PROVIDER_ARN"
-            },
-            "Action": "sts:AssumeRoleWithWebIdentity",
-            "Condition": {
-                "StringLike": {
-                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:sub": "system:serviceaccount:$SYSTEM_NAMESPACE:emr-containers-sa-*"
-                },
-                "StringEquals": {
-                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:aud": "sts.amazonaws.com"
-                }
-            }
-        }
-    ]
-}
-EOF
+#=======================Query Engine Role=====================================================
 
-# Query Execution Role 생성
-aws iam create-role \
-    --role-name $QUERY_EXECUTION_ROLE_NAME \
-    --assume-role-policy-document file:///tmp/query-execution-trust-policy.json \
-    --description "Lake Formation Query Execution Role for EMR on EKS System Driver" \
-    2>/dev/null || echo "   Query Execution Role이 이미 존재합니다."
-
-# Query Execution Role Permissions Policy
-cat > /tmp/query-execution-permissions-policy.json << EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "AssumeJobRoleWithSessionTagAccessForSystemDriver",
-            "Effect": "Allow",
-            "Action": [
-                "sts:AssumeRole",
-                "sts:TagSession"
-            ],
-            "Resource": [
-                "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
-                "arn:aws:iam::$ACCOUNT_ID:role/$LF_GANGNAM_ANALYTICS_ROLE",
-                "arn:aws:iam::$ACCOUNT_ID:role/$LF_OPERATION_ROLE",
-                "arn:aws:iam::$ACCOUNT_ID:role/$LF_MARKETING_PARTNER_ROLE"
-            ],
-            "Condition": {
-                "StringLike": {
-                    "aws:RequestTag/LakeFormationAuthorizedCaller": "$LF_SESSION_TAG_VALUE"
-                }
-            }
-        },
-        {
-            "Sid": "CreateCertificateAccessForTLS",
-            "Effect": "Allow",
-            "Action": "emr-containers:CreateCertificate",
-            "Resource": "*"
-        },
-        {
-            "Sid": "GlueCatalogAccessForQueryExecution",
-            "Effect": "Allow",
-            "Action": [
-                "glue:Get*",
-                "glue:List*"
-            ],
-            "Resource": ["*"]
-        },
-        {
-            "Sid": "LakeFormationAccessForQueryExecution",
-            "Effect": "Allow",
-            "Action": [
-                "lakeformation:GetDataAccess",
-                "lakeformation:GetWorkUnits",
-                "lakeformation:StartQueryPlanning",
-                "lakeformation:GetWorkUnitResults"
-            ],
-            "Resource": ["*"]
-        }
-    ]
-}
-EOF
-
-# Query Execution Role에 권한 정책 연결
-aws iam put-role-policy \
-    --role-name $QUERY_EXECUTION_ROLE_NAME \
-    --policy-name "QueryExecutionPermissions" \
-    --policy-document file:///tmp/query-execution-permissions-policy.json
-
-echo "   ✅ Query Execution Role 생성 완료"
-
-# Query Engine Role 생성 (System Executor용)
-echo "   Query Engine Role (System Executor용) 생성 중..."
+# Query Engine Role 생성 (System Driver & Executor용)
+echo "   Query Engine Role (System Driver & Executor용) 생성 중..."
 
 # Query Engine Role Trust Policy
 cat > /tmp/query-engine-trust-policy.json << EOF
@@ -299,12 +196,20 @@ cat > /tmp/query-engine-trust-policy.json << EOF
 }
 EOF
 
-# Query Engine Role 생성
-aws iam create-role \
-    --role-name $QUERY_ENGINE_ROLE_NAME \
-    --assume-role-policy-document file:///tmp/query-engine-trust-policy.json \
-    --description "Lake Formation Query Engine Role for EMR on EKS System Executor" \
-    2>/dev/null || echo "   Query Engine Role이 이미 존재합니다."
+# Query Engine Role 생성 또는 Trust Policy 업데이트
+if aws iam get-role --role-name $QUERY_ENGINE_ROLE_NAME >/dev/null 2>&1; then
+    echo "   Query Engine Role이 이미 존재합니다. Trust Policy를 업데이트합니다..."
+    aws iam update-assume-role-policy \
+        --role-name $QUERY_ENGINE_ROLE_NAME \
+        --policy-document file:///tmp/query-engine-trust-policy.json
+    echo "   ✅ Query Engine Role Trust Policy 업데이트 완료"
+else
+    aws iam create-role \
+        --role-name $QUERY_ENGINE_ROLE_NAME \
+        --assume-role-policy-document file:///tmp/query-engine-trust-policy.json \
+        --description "Lake Formation Query Engine Role for EMR on EKS System Executor"
+    echo "   ✅ Query Engine Role 생성 완료"
+fi
 
 # Query Engine Role Permissions Policy (AWS 공식 문서 기준)
 cat > /tmp/query-engine-permissions-policy.json << EOF
@@ -335,7 +240,10 @@ cat > /tmp/query-engine-permissions-policy.json << EOF
             "Effect": "Allow",
             "Action": [
                 "glue:Get*",
-                "glue:List*"
+                "glue:List*",
+                "glue:GetUnfilteredTableMetadata",
+                "glue:GetUnfilteredPartitionMetadata",
+                "glue:GetUnfilteredPartitionsMetadata"
             ],
             "Resource": ["*"]
         },
@@ -346,7 +254,9 @@ cat > /tmp/query-engine-permissions-policy.json << EOF
                 "lakeformation:GetDataAccess",
                 "lakeformation:GetWorkUnits",
                 "lakeformation:StartQueryPlanning",
-                "lakeformation:GetWorkUnitResults"
+                "lakeformation:GetWorkUnitResults",
+                "lakeformation:GetTemporaryGlueTableCredentials",
+                "lakeformation:GetTemporaryGluePartitionCredentials"
             ],
             "Resource": ["*"]
         },
@@ -374,6 +284,175 @@ aws iam put-role-policy \
     --policy-document file:///tmp/query-engine-permissions-policy.json
 
 echo "   ✅ Query Engine Role 생성 완료"
+
+
+# Trust policy of Query Engine role to trust the Kubernetes System namespace.
+# aws emr-containers update-role-trust-policy \
+#     --cluster-name $CLUSTER_NAME \
+#     --namespace $SYSTEM_NAMESPACE \
+#     --role-name $QUERY_ENGINE_ROLE_NAME \
+#     --region $REGION 
+
+    
+#================== Query Engine Role 완료 =======================================================
+
+
+ 
+#================== Job Execution Role 시작 =======================================================
+# Job Execution Role Trust Policy 업데이트 (AWS 공식 문서 기준)
+echo "   Job Execution Role Trust Policy 업데이트 중..."
+
+cat > /tmp/job-execution-trust-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "emr-containers.amazonaws.com",
+                    "glue.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+            },
+            "Action": "sts:AssumeRole"
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "$OIDC_PROVIDER_ARN"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringLike": {
+                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:sub": [
+                        "system:serviceaccount:$USER_NAMESPACE:emr-containers-sa-*",
+                        "system:serviceaccount:emr-data-team-a:emr-data-*-sa",
+                        "system:serviceaccount:$USER_NAMESPACE:emr-*-sa",
+                        "system:serviceaccount:$SYSTEM_NAMESPACE:emr-containers-sa-*"
+                    ]
+                },
+                "StringEquals": {
+                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:aud": "sts.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Sid": "TrustQueryExecutionRoleForSystemDriver",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": [
+                    "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
+                    "arn:aws:iam::$ACCOUNT_ID:role/$LF_GANGNAM_ANALYTICS_ROLE",
+                    "arn:aws:iam::$ACCOUNT_ID:role/$LF_OPERATION_ROLE",
+                    "arn:aws:iam::$ACCOUNT_ID:role/$LF_MARKETING_PARTNER_ROLE"
+                ]
+            },
+            "Action": [
+                "sts:AssumeRole",
+                "sts:TagSession"
+            ],
+            "Condition": {
+                "StringLike": {
+                    "aws:RequestedRegion": "$REGION",
+                    "aws:RequestTag/LakeFormationAuthorizedCaller": "$LF_SESSION_TAG_VALUE"
+                }
+            }
+        },
+        {
+            "Sid": "TrustQueryEngineRoleForSystemExecutor",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": ["arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME"]
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedRegion": "$REGION"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+# Job Execution Role 생성 또는 Trust Policy 업데이트
+echo "   Job Execution Role (User Driver & Executor용) 생성 중..."
+if aws iam get-role --role-name $JOB_EXECUTION_ROLE_NAME >/dev/null 2>&1; then
+    echo "   Job Execution Role이 이미 존재합니다. Trust Policy를 업데이트합니다..."
+    aws iam update-assume-role-policy \
+        --role-name $JOB_EXECUTION_ROLE_NAME \
+        --policy-document file:///tmp/job-execution-trust-policy.json
+    echo "   ✅Job Execution Role Trust Policy 업데이트 완료"
+else
+    aws iam create-role \
+        --role-name $JOB_EXECUTION_ROLE_NAME \
+        --assume-role-policy-document file:///tmp/job-execution-trust-policy.json \
+        --description "Lake Formation Job Execution Role for EMR on EKS User profile"
+    echo "   ✅ Job Execution Role 생성 완료"
+fi
+
+
+echo "   ✅ Job Execution Role Trust Policy 업데이트 완료 (AWS 공식 문서 기준)"
+
+
+echo "   Job Execution Role Permission Policy 업데이트 중..."
+
+cat > /tmp/lake-formation-permissions.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "GlueCatalogAccess",
+            "Effect": "Allow",
+            "Action": [
+                "glue:Get*",
+                "glue:Create*",
+                "glue:Update*"
+            ],
+            "Resource": ["*"]
+        },
+        {
+            "Sid": "LakeFormationAccess",
+            "Effect": "Allow",
+            "Action": [
+                "lakeformation:GetDataAccess"
+            ],
+            "Resource": ["*"]
+        },
+        {
+            "Sid": "CreateCertificateAccessForTLS",
+            "Effect": "Allow",
+            "Action": "emr-containers:CreateCertificate",
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+    
+# Lake Formation 권한 정책 연결
+aws iam put-role-policy \
+    --role-name $JOB_EXECUTION_ROLE_NAME \
+    --policy-name "LakeFormationPermissions" \
+    --policy-document file:///tmp/lake-formation-permissions.json
+
+# aws emr-containers update-role-trust-policy \
+#     --cluster-name $CLUSTER_NAME \
+#     --namespace $USER_NAMESPACE \
+#     --role-name $JOB_EXECUTION_ROLE_NAME \
+#     --region $REGION
+
+echo "✅ 모든 Lake Formation 역할에 EMR 실행 권한 추가 완료"
+
+
+
+#================== Job Execution Role 개별=======================================================
 
 # Job Execution Role Trust Policy 업데이트 (AWS 공식 문서 기준)
 echo "   Job Execution Role Trust Policy 업데이트 중..."
@@ -414,7 +493,8 @@ for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_
                     "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:sub": [
                         "system:serviceaccount:$USER_NAMESPACE:emr-containers-sa-*",
                         "system:serviceaccount:emr-data-team-a:emr-data-*-sa",
-                        "system:serviceaccount:$USER_NAMESPACE:emr-*-sa"
+                        "system:serviceaccount:$USER_NAMESPACE:emr-*-sa",
+                        "system:serviceaccount:$SYSTEM_NAMESPACE:emr-containers-sa-*"
                     ]
                 },
                 "StringEquals": {
@@ -426,7 +506,7 @@ for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_
             "Sid": "TrustQueryExecutionRoleForSystemDriver",
             "Effect": "Allow",
             "Principal": {
-                "AWS": ["arn:aws:iam::$ACCOUNT_ID:role/$QUERY_EXECUTION_ROLE_NAME"]
+                "AWS": ["arn:aws:iam::$ACCOUNT_ID:role/$JOB_EXECUTION_ROLE_NAME"]
             },
             "Action": [
                 "sts:AssumeRole",
@@ -463,6 +543,7 @@ EOF
 done
 
 echo "   ✅ Job Execution Role Trust Policy 업데이트 완료 (AWS 공식 문서 기준)"
+
 
 # Job Execution Role에 Lake Formation 권한 추가
 echo "   Job Execution Role에 Lake Formation 권한 추가 중..."
@@ -510,75 +591,43 @@ EOF
         --policy-document file:///tmp/lake-formation-permissions-$role.json
 done
 
-echo "   ✅ Job Execution Role Lake Formation 권한 추가 완료"
+#================== Job Execution Role 개별 끝=======================================================
 
-# EMR on EKS 실행에 필요한 추가 권한 추가 중...
-echo "EMR on EKS 실행에 필요한 추가 권한 추가 중..."
-
-for role in "LF_DataStewardRole" "LF_GangnamAnalyticsRole" "LF_OperationRole" "LF_MarketingPartnerRole"; do
-    echo "  $role에 EMR 실행 권한 추가 중..."
-    
-    cat > /tmp/emr-execution-permissions-$role.json << EOF
+#================== Script bucket 개별끝=======================================================
+cat > /tmp/scripts-bucket-permissions.json << EOF
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "EMRContainersAccess",
-            "Effect": "Allow",
-            "Action": [
-                "emr-containers:DescribeJobRun",
-                "emr-containers:ListJobRuns",
-                "emr-containers:DescribeVirtualCluster",
-                "emr-containers:CreateCertificate"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "S3TablesAccess",
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject",
-                "s3:ListBucket",
-                "s3:GetBucketLocation"
-            ],
-            "Resource": [
-                "arn:aws:s3:::$ICEBERG_BUCKET_NAME",
-                "arn:aws:s3:::$ICEBERG_BUCKET_NAME/*",
-                "arn:aws:s3:::$SCRIPTS_BUCKET",
-                "arn:aws:s3:::$SCRIPTS_BUCKET/*"
-            ]
-        },
-        {
-            "Sid": "GlueCatalogAccessForIceberg",
-            "Effect": "Allow",
-            "Action": [
-                "glue:GetDatabase",
-                "glue:GetDatabases",
-                "glue:GetTable",
-                "glue:GetTables",
-                "glue:GetPartition",
-                "glue:GetPartitions",
-                "glue:CreateTable",
-                "glue:UpdateTable",
-                "glue:DeleteTable"
-            ],
-            "Resource": "*"
-        }
-    ]
+     "Version": "2012-10-17",
+     "Statement": [
+         {
+             "Sid": "ScriptsBucketAccess",
+             "Effect": "Allow",
+             "Action": [
+                 "s3:GetObject",
+                 "s3:ListBucket",
+                 "s3:GetBucketLocation"
+            ], 
+             "Resource": [
+                 "arn:aws:s3:::${SCRIPTS_BUCKET}",
+                 "arn:aws:s3:::${SCRIPTS_BUCKET}/*"
+             ]
+         }
+     ]
 }
 EOF
+
+for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_ROLE" "$LF_MARKETING_PARTNER_ROLE"; do
+    echo "  $role에 스크립트 버킷 접근 권한 추가 중..."
     
+
     aws iam put-role-policy \
         --role-name $role \
-        --policy-name "EMRExecutionPermissions" \
-        --policy-document file:///tmp/emr-execution-permissions-$role.json
+        --policy-name "ScriptsBucketAccess" \
+        --policy-document file:///tmp/scripts-bucket-permissions.json
     
-    echo "  ✅ $role EMR 실행 권한 추가 완료"
+    echo "  ✅ $role 스크립트 버킷 접근 권한 추가 완료"
 done
 
-echo "✅ 모든 Lake Formation 역할에 EMR 실행 권한 추가 완료"
+echo "✅ 모든 Lake Formation 역할에 스크립트 버킷 접근 권한 추가 완료"
 
 
 # CloudWatch Logs 권한 범위 확장 중...
@@ -660,7 +709,7 @@ SECURITY_CONFIG_ID=$(aws emr-containers create-security-configuration \
                     "clusterId": "'$CLUSTER_NAME'",
                     "namespace": "'$SYSTEM_NAMESPACE'"
                 },
-                "queryEngineRoleArn": "arn:aws:iam::'$ACCOUNT_ID':role/'$QUERY_EXECUTION_ROLE_NAME'"
+                "queryEngineRoleArn": "arn:aws:iam::'$ACCOUNT_ID':role/'$JOB_EXECUTION_ROLE_NAME'"
             }
         }
     }' \
@@ -674,49 +723,33 @@ echo "5. Lake Formation FGAC Virtual Cluster 생성..."
 
 LF_VIRTUAL_CLUSTER_NAME="seoul-bike-lf-vc"
 
-# 기존 Virtual Cluster 삭제 (있다면)
+# 기존 Virtual Cluster 확인 및 재사용
 EXISTING_VC=$(aws emr-containers list-virtual-clusters \
     --region $REGION \
     --query "virtualClusters[?name=='$LF_VIRTUAL_CLUSTER_NAME' && state=='RUNNING'].id" \
     --output text)
 
 if [ ! -z "$EXISTING_VC" ] && [ "$EXISTING_VC" != "None" ]; then
-    echo "   기존 Virtual Cluster 삭제 중: $EXISTING_VC"
-    aws emr-containers delete-virtual-cluster \
-        --id $EXISTING_VC \
-        --region $REGION
-    
-    # 삭제 완료 대기
-    echo "   Virtual Cluster 삭제 대기 중..."
-    while true; do
-        VC_STATE=$(aws emr-containers describe-virtual-cluster \
-            --id $EXISTING_VC \
-            --region $REGION \
-            --query 'virtualCluster.state' \
-            --output text 2>/dev/null || echo "TERMINATED")
-        
-        if [ "$VC_STATE" = "TERMINATED" ]; then
-            break
-        fi
-        sleep 10
-    done
-fi
-
-# Lake Formation FGAC Virtual Cluster 생성
-LF_VIRTUAL_CLUSTER_ID=$(aws emr-containers create-virtual-cluster \
-    --name $LF_VIRTUAL_CLUSTER_NAME \
-    --region $REGION \
-    --container-provider '{
-        "id": "'$CLUSTER_NAME'",
-        "type": "EKS",
-        "info": {
-            "eksInfo": {
-                "namespace": "'$USER_NAMESPACE'"
+    echo "   ✅ 기존 Virtual Cluster 재사용: $EXISTING_VC"
+    LF_VIRTUAL_CLUSTER_ID=$EXISTING_VC
+else
+    echo "   새로운 Virtual Cluster 생성 중..."
+    LF_VIRTUAL_CLUSTER_ID=$(aws emr-containers create-virtual-cluster \
+        --name $LF_VIRTUAL_CLUSTER_NAME \
+        --region $REGION \
+        --container-provider '{
+            "id": "'$CLUSTER_NAME'",
+            "type": "EKS",
+            "info": {
+                "eksInfo": {
+                    "namespace": "'$USER_NAMESPACE'"
+                }
             }
-        }
-    }' \
-    --security-configuration-id $SECURITY_CONFIG_ID \
-    --query 'id' --output text)
+        }' \
+        --security-configuration-id $SECURITY_CONFIG_ID \
+        --query 'id' --output text)
+    echo "   ✅ Virtual Cluster 생성 완료: $LF_VIRTUAL_CLUSTER_ID"
+fi
 
 echo "   ✅ Lake Formation FGAC Virtual Cluster 생성 완료: $LF_VIRTUAL_CLUSTER_ID"
 
@@ -731,7 +764,7 @@ cat >> .env << EOF
 LF_SESSION_TAG_VALUE=$LF_SESSION_TAG_VALUE
 SYSTEM_NAMESPACE=$SYSTEM_NAMESPACE
 USER_NAMESPACE=$USER_NAMESPACE
-QUERY_EXECUTION_ROLE_NAME=$QUERY_EXECUTION_ROLE_NAME
+JOB_EXECUTION_ROLE_NAME=$JOB_EXECUTION_ROLE_NAME
 QUERY_ENGINE_ROLE_NAME=$QUERY_ENGINE_ROLE_NAME
 SECURITY_CONFIG_NAME=$SECURITY_CONFIG_NAME
 SECURITY_CONFIG_ID=$SECURITY_CONFIG_ID
@@ -760,7 +793,7 @@ echo "├───────────────────────�
 echo "│ Session Tag Value           │ $LF_SESSION_TAG_VALUE               │"
 echo "│ System Namespace            │ $SYSTEM_NAMESPACE                   │"
 echo "│ User Namespace              │ $USER_NAMESPACE                     │"
-echo "│ Query Execution Role (Driver) │ $QUERY_EXECUTION_ROLE_NAME      │"
+echo "│ Query Execution Role (Driver) │ $JOB_EXECUTION_ROLE_NAME      │"
 echo "│ Query Engine Role (Executor)   │ $QUERY_ENGINE_ROLE_NAME         │"
 echo "│ Security Configuration      │ $SECURITY_CONFIG_ID                 │"
 echo "│ LF Virtual Cluster          │ $LF_VIRTUAL_CLUSTER_ID              │"

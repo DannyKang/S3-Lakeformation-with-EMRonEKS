@@ -21,7 +21,7 @@
           "spark.sql.catalog.s3tablesbucket.client.region": "ap-northeast-2",
           "spark.sql.defaultCatalog": "s3tablesbucket",
           "spark.kubernetes.driver.podTemplateFile": "s3://seoul-bike-analytics-scripts-769403660383/pod-templates/driver-pod-template.yaml",
-          "spark.kubernetes.executor.podTemplateFile": "s3://seoul-bike-analytics-scripts-769403660383/pod-templates/executor-pod-template.yaml",
+          
           "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.WebIdentityTokenCredentialsProvider",
           "spark.hadoop.aws.credentials.provider": "com.amazonaws.auth.WebIdentityTokenCredentialsProvider",
           "spark.hadoop.fs.s3a.endpoint.region": "ap-northeast-2",
