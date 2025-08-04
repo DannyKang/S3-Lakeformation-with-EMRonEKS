@@ -53,6 +53,10 @@ results/reports/
 *.log
 logs/
 
+# Backups
+*.backup
+
+
 # Environment variables
 .env
 .env.local
