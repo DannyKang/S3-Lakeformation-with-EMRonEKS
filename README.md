@@ -147,7 +147,9 @@ pip install boto3 pandas seaborn
 ### 1단계: S3 Iceberg 버킷 및 환경 설정
 
 ```bash
+
 # S3 Iceberg 버킷 생성 (고유한 버킷명 자동 생성)
+chmod +x ./scripts/01-create-s3-bucket.sh
 ./scripts/01-create-s3-bucket.sh
 ```
 
@@ -169,6 +171,7 @@ pip install boto3 pandas seaborn
 
 ```bash
 # 로컬 데이터를 S3 Iceberg에 적재
+chmod +x ./scripts/02-load-data-to-iceberg.sh
 ./scripts/02-load-data-to-iceberg.sh
 ```
 
@@ -187,6 +190,7 @@ pip install boto3 pandas seaborn
 
 ```bash
 # Lake Formation FGAC용 IAM 역할 생성
+chmod +x ./scripts/03-create-iam-roles.sh
 ./scripts/03-create-iam-roles.sh
 ```
 
@@ -208,6 +212,7 @@ pip install boto3 pandas seaborn
 
 ```bash
 # Lake Formation 기본 권한 설정 (Iceberg 테이블)
+chmod +x ./scripts/04-setup-lakeformation-permissions-iceberg.sh
 ./scripts/04-setup-lakeformation-permissions-iceberg.sh
 ```
 
@@ -230,8 +235,11 @@ pip install boto3 pandas seaborn
 
 ```bash
 # EMR on EKS 환경 구성 (Blueprint 기반)
+chmod +x ./scripts/05-setup-emr-on-eks.sh
 ./scripts/05-setup-emr-on-eks.sh
 ```
+
+✅ Terraform 실행중 오류가 발생하는 경우 위 스크립트(./scripts/05-setup-emr-on-eks.sh)를 제 실행하세요
 
 **설정되는 리소스**:
 - **EKS 클러스터**: seoul-bike-emr (Karpenter 기반 자동 스케일링)
@@ -246,6 +254,7 @@ pip install boto3 pandas seaborn
 
 ```bash
 # Lake Formation Fine-Grained Access Control 설정
+chmod +x ./scripts/06-setup-lake-formation-fgac.sh
 ./scripts/06-setup-lake-formation-fgac.sh
 ```
 
@@ -265,6 +274,7 @@ pip install boto3 pandas seaborn
 
 ```bash
 # 역할별 EMR on EKS Job 실행
+chmod +x ./scripts/07-run-emr-jobs.sh
 ./scripts/07-run-emr-jobs.sh
 ```
 
@@ -287,6 +297,7 @@ aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --
 
 ```bash
 # 권한 검증 및 결과 분석
+chmod +x ./scripts/08-verify-and-analyze.sh
 ./scripts/08-verify-and-analyze.sh
 ```
 
@@ -300,6 +311,7 @@ aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --
 
 ```bash
 # 전체 리소스 정리
+chmod +x ./scripts/10-cleanup-all-resources.sh
 ./scripts/10-cleanup-all-resources.sh
 ```
 
