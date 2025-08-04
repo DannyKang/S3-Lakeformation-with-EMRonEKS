@@ -126,13 +126,13 @@ MarketingPartner: 10개 컬럼 (birth_year 제외)
 ```bash
 # 1. 프로젝트 클론
 git clone https://github.com/DannyKang/S3-Tables-LakeFormation-with-EMRonEKS
-cd S3-Tables-LakeFormation-with-EMRonEKS
+cd S3-Lakeformation-with-EMRonEKS
 
 # 2. AWS CLI 설정 (ap-northeast-2 리전 사용)
 aws configure set region ap-northeast-2
 
 # 3. 필요한 Python 패키지 설치
-pip install boto3 pandas matplotlib seaborn
+pip install boto3 pandas seaborn
 ```
 
 ⚠️ **중요**: 

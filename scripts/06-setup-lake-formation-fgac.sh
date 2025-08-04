@@ -384,7 +384,7 @@ cat > /tmp/job-execution-trust-policy.json << EOF
             "Sid": "TrustQueryEngineRoleForSystemExecutor",
             "Effect": "Allow",
             "Principal": {
-                "AWS": ["arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME"]
+                "AWS": "arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME"
             },
             "Action": "sts:AssumeRole",
             "Condition": {
@@ -538,7 +538,7 @@ for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_
             "Sid": "TrustQueryEngineRoleForSystemExecutor",
             "Effect": "Allow",
             "Principal": {
-                "AWS": ["arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME"]
+                "AWS": "arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME"
             },
             "Action": "sts:AssumeRole",
             "Condition": {
