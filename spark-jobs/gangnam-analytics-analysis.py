@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gangnam Analytics Analysis - 강남구 데이터 분석
-Lake Formation FGAC 데모용 - 강남구 데이터만 접근 (~3,000건)
+Lake Formation FGAC 데모용 - 강남구 데이터만 접근 (개인정보 birth_year 제외)
 """
 
 from pyspark.sql import SparkSession
@@ -10,93 +10,87 @@ from pyspark.sql.types import *
 import sys
 
 def create_spark_session():
-    """Iceberg 지원 Spark 세션 생성"""
+    """Lake Formation FGAC 지원 Spark 세션 생성"""
     return SparkSession.builder \
-        .appName("GangnamAnalytics-RegionalAccess-Analysis") \
+        .appName("GangnamAnalytics-DistrictAnalysis") \
         .getOrCreate()
 
 def main():
     print("=== Gangnam Analytics Analysis 시작 ===")
-    print("역할: 강남구 분석가 - 강남구 데이터만 접근")
+    print("역할: 강남구 분석가 - 강남구 데이터만 접근 (개인정보 제외)")
     
     spark = create_spark_session()
     
     try:
-        # Glue 카탈로그에서 Iceberg 테이블 데이터 읽기
-        print("\n1. Glue 카탈로그에서 데이터 로드 중...")
-        namespace = 'bike_db'
-        table_name = 'bike_rental_data'
+        # Lake Formation FGAC를 통해 데이터 읽기
+        print("\n1. Lake Formation FGAC를 통해 데이터 로드 중...")
+        namespace = "bike_db"
+        table_name = "bike_rental_data"
         
         print(f"   네임스페이스: {namespace}")
         print(f"   테이블명: {table_name}")
+        print(f"   카탈로그: glue_catalog.{namespace}.{table_name}")
         
-        df = spark.table(f"{namespace}.{table_name}")
+        # Glue 카탈로그를 통해 데이터 읽기
+        df = spark.read.table(f"glue_catalog.{namespace}.{table_name}")
         
         total_records = df.count()
         print(f"✅ Lake Formation 필터링 후 레코드 수: {total_records:,}건")
-        print("🔒 접근 제한: 강남구 데이터만 (개인정보 birth_year 제외)")
+        print("🔒 접근 제한: 개인정보 birth_year 제외")
         
-        # 데이터 스키마 확인 (접근 가능한 컬럼만)
+        # 데이터 스키마 확인
         print("\n2. 접근 가능한 데이터 스키마:")
         df.printSchema()
         
-        # 강남구 데이터 확인
-        print(f"\n3. 지역 분포 확인:")
-        district_check = df.groupBy("district").count().orderBy(desc("count"))
-        district_check.show()
+        # 기본 통계
+        print(f"\n3. 기본 통계 정보:")
+        print(f"   • 고유 대여 ID: {df.select('rental_id').distinct().count():,}")
+        print(f"   • 고유 정거장: {df.select('station_id').distinct().count():,}")
+        print(f"   • 고유 구: {df.select('district').distinct().count()}")
         
-        # 정거장별 이용 현황
-        print(f"\n4. 강남구 정거장별 이용 현황 (상위 10개):")
-        station_stats = df.groupBy("station_name", "station_id") \
-                          .agg(count("*").alias("이용횟수"),
-                               avg("usage_min").alias("평균_이용시간"),
-                               avg("distance_meter").alias("평균_이동거리")) \
-                          .orderBy(desc("이용횟수")) \
+        # 구별 분포 확인 (Lake Formation 필터링 결과)
+        print(f"\n4. 구별 분포 (Lake Formation 필터링 결과):")
+        district_stats = df.groupBy("district") \
+                           .agg(count("*").alias("count"),
+                                avg("usage_min").alias("avg_usage"),
+                                avg("distance_meter").alias("avg_distance")) \
+                           .orderBy(desc("count"))
+        
+        district_stats.show(truncate=False)
+        
+        # 성별 분포
+        print(f"\n5. 성별 분포:")
+        gender_stats = df.groupBy("gender") \
+                         .agg(count("*").alias("count"),
+                              avg("usage_min").alias("avg_usage")) \
+                         .orderBy(desc("count"))
+        
+        gender_stats.show()
+        
+        # 정거장별 이용 현황 (상위 10개)
+        print(f"\n6. 정거장별 이용 현황 (상위 10개):")
+        station_stats = df.groupBy("station_id", "station_name") \
+                          .agg(count("*").alias("rental_count"),
+                               avg("usage_min").alias("avg_usage"),
+                               avg("distance_meter").alias("avg_distance")) \
+                          .orderBy(desc("rental_count")) \
                           .limit(10)
         
         station_stats.show(truncate=False)
         
-        # 성별 분포 (접근 가능)
-        print(f"\n5. 성별 이용 분포:")
-        gender_stats = df.groupBy("gender") \
-                         .agg(count("*").alias("이용횟수"),
-                              avg("usage_min").alias("평균_이용시간"),
-                              avg("distance_meter").alias("평균_이동거리")) \
-                         .orderBy(desc("이용횟수"))
-        
-        gender_stats.show()
-        
-        # 사용자 유형별 분포
-        print(f"\n6. 사용자 유형별 분포:")
-        user_type_stats = df.groupBy("user_type") \
-                            .agg(count("*").alias("이용횟수"),
-                                 avg("usage_min").alias("평균_이용시간")) \
-                            .orderBy(desc("이용횟수"))
-        
-        user_type_stats.show()
-        
-        # 이용 시간대별 패턴
-        print(f"\n7. 시간대별 이용 패턴:")
-        hourly_pattern = df.withColumn("hour", hour("rental_date")) \
-                           .groupBy("hour") \
-                           .count() \
-                           .orderBy("hour")
-        
-        hourly_pattern.show(24)
-        
-        # 이용 시간 분석
-        print(f"\n8. 이용 시간 통계:")
+        # 대여 시간 통계
+        print(f"\n7. 대여 시간 통계:")
         usage_stats = df.select(
-            avg("usage_min").alias("평균_이용시간"),
-            min("usage_min").alias("최소_이용시간"),
-            max("usage_min").alias("최대_이용시간"),
-            expr("percentile_approx(usage_min, 0.5)").alias("중앙값_이용시간")
+            avg("usage_min").alias("평균_대여시간"),
+            min("usage_min").alias("최소_대여시간"),
+            max("usage_min").alias("최대_대여시간"),
+            expr("percentile_approx(usage_min, 0.5)").alias("중앙값_대여시간")
         )
         
         usage_stats.show()
         
-        # 이동 거리 분석
-        print(f"\n9. 이동 거리 통계:")
+        # 이동 거리 통계
+        print(f"\n8. 이동 거리 통계:")
         distance_stats = df.select(
             avg("distance_meter").alias("평균_이동거리"),
             min("distance_meter").alias("최소_이동거리"),
@@ -106,20 +100,36 @@ def main():
         
         distance_stats.show()
         
-        # 요일별 이용 패턴
-        print(f"\n10. 요일별 이용 패턴:")
-        weekday_pattern = df.withColumn("weekday", date_format("rental_date", "EEEE")) \
-                            .groupBy("weekday") \
-                            .agg(count("*").alias("이용횟수"),
-                                 avg("usage_min").alias("평균_이용시간")) \
-                            .orderBy(desc("이용횟수"))
+        # 시간대별 이용 패턴
+        print(f"\n9. 시간대별 이용 패턴:")
+        hourly_pattern = df.withColumn("hour", hour("rental_date")) \
+                           .groupBy("hour") \
+                           .count() \
+                           .orderBy("hour")
         
-        weekday_pattern.show()
+        hourly_pattern.show(24)
+        
+        # 사용자 유형별 분석
+        print(f"\n10. 사용자 유형별 분석:")
+        user_type_stats = df.groupBy("user_type") \
+                            .agg(count("*").alias("count"),
+                                 avg("usage_min").alias("avg_usage"),
+                                 avg("distance_meter").alias("avg_distance")) \
+                            .orderBy(desc("count"))
+        
+        user_type_stats.show()
+        
+        # 데이터 품질 검증
+        print(f"\n11. 데이터 품질 검증:")
+        null_counts = df.select([count(when(col(c).isNull(), c)).alias(c) for c in df.columns])
+        print("컬럼별 NULL 값 개수:")
+        null_counts.show()
         
         print(f"\n=== Gangnam Analytics Analysis 완료 ===")
-        print(f"✅ 분석 완료: {total_records:,}건 (강남구만)")
-        print(f"🔒 권한: 강남구 데이터만 접근 (birth_year 컬럼 제외)")
-        print(f"📊 역할: 강남구 지역 특화 분석 및 서비스 기획")
+        print(f"✅ 분석 완료: {total_records:,}건")
+        print(f"🔒 권한: Lake Formation FGAC 적용 (개인정보 birth_year 제외)")
+        print(f"📊 역할: 지역별 분석 및 서비스 기획")
+        print(f"🗂️ 카탈로그: Glue Catalog (Apache Iceberg)")
         
     except Exception as e:
         print(f"❌ 오류 발생: {e}")

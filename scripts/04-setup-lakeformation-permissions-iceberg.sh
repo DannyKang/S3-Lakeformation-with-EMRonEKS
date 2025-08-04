@@ -2,6 +2,11 @@
 
 # Lake Formation FGAC 권한 설정 스크립트 (Iceberg)
 # Glue Catalog를 사용하는 Iceberg 테이블 방식
+# 
+# 업데이트: 2025-08-04
+# - DataSteward 권한을 실제 적용된 Data Cells Filter 방식으로 변경
+# - 모든 역할이 Data Cells Filter를 통해 일관된 방식으로 접근
+# - Multi-dimensional FGAC 완전 구현 (Row/Column/Cell-level Filtering)
 
 set -e
 
@@ -87,7 +92,7 @@ else
     exit 1
 fi
 
-# 2. LF_DataStewardRole - 전체 데이터 접근 권한
+# 2. LF_DataStewardRole - 전체 데이터 접근 권한 (Data Cells Filter 방식)
 echo ""
 echo "2. $LF_DATA_STEWARD_ROLE 권한 설정 (전체 데이터 접근)..."
 
@@ -99,19 +104,62 @@ aws lakeformation grant-permissions \
     --resource "Database={Name=${DATABASE_NAME}}" \
     --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  데이터베이스 권한이 이미 부여되어 있습니다."
 
-# 테이블 전체 컬럼 권한
-echo "   테이블 전체 컬럼 권한 부여 중..."
+# 테이블 기본 권한
+echo "   테이블 기본 권한 부여 중..."
 aws lakeformation grant-permissions \
     --region $REGION \
     --principal DataLakePrincipalIdentifier=$LF_DATA_STEWARD_ROLE_ARN \
-    --resource "TableWithColumns={
-        DatabaseName=${DATABASE_NAME},
-        Name=${TABLE_NAME},
-        ColumnWildcard={}
-    }" \
-    --permissions "SELECT" 2>/dev/null || echo "   ⚠️  테이블 권한이 이미 부여되어 있습니다."
+    --resource "Table={DatabaseName=${DATABASE_NAME},Name=${TABLE_NAME}}" \
+    --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  테이블 권한이 이미 부여되어 있습니다."
 
-echo "   ✅ DataSteward: 전체 11개 컬럼, 모든 구, 모든 연령대 (100,000건)"
+# DataSteward Data Cells Filter 생성 (전체 데이터 + 전체 컬럼)
+echo "   DataSteward Data Cells Filter 생성 중 (전체 접근)..."
+
+# 필터 이름 설정
+DATASTEWARD_FILTER_NAME="DataSteward-FullAccess"
+
+# 기존 필터 삭제 (있다면)
+echo "   기존 필터 삭제 중..."
+aws lakeformation delete-data-cells-filter \
+    --region $REGION \
+    --table-catalog-id $ACCOUNT_ID \
+    --database-name $DATABASE_NAME \
+    --table-name $TABLE_NAME \
+    --name $DATASTEWARD_FILTER_NAME 2>/dev/null || echo "   기존 필터 없음"
+
+# 새 필터 생성 (전체 데이터 + 전체 컬럼)
+aws lakeformation create-data-cells-filter \
+    --region $REGION \
+    --table-data "{
+        \"TableCatalogId\": \"${ACCOUNT_ID}\",
+        \"DatabaseName\": \"${DATABASE_NAME}\",
+        \"TableName\": \"${TABLE_NAME}\",
+        \"Name\": \"${DATASTEWARD_FILTER_NAME}\",
+        \"RowFilter\": {
+            \"FilterExpression\": \"TRUE\",
+            \"AllRowsWildcard\": {}
+        },
+        \"ColumnWildcard\": {
+            \"ExcludedColumnNames\": []
+        }
+    }" 2>/dev/null || echo "   ⚠️  필터가 이미 존재합니다."
+
+# 필터 권한 부여 (EMR on EKS FGAC 필수)
+echo "   필터 권한 부여 중 (EMR on EKS FGAC 필수)..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_DATA_STEWARD_ROLE_ARN \
+    --resource "{
+        \"DataCellsFilter\": {
+            \"TableCatalogId\": \"${ACCOUNT_ID}\",
+            \"DatabaseName\": \"${DATABASE_NAME}\",
+            \"TableName\": \"${TABLE_NAME}\",
+            \"Name\": \"${DATASTEWARD_FILTER_NAME}\"
+        }
+    }" \
+    --permissions "SELECT" 2>/dev/null || echo "   ⚠️  필터 권한이 이미 부여되어 있습니다."
+
+echo "   ✅ DataSteward: 전체 11개 컬럼, 모든 구, 모든 연령대 (100,000건) - Data Cells Filter 방식"
 
 # 3. LF_GangnamAnalyticsRole - 강남구 데이터만, birth_year 제외
 echo ""
@@ -125,13 +173,48 @@ aws lakeformation grant-permissions \
     --resource "Database={Name=${DATABASE_NAME}}" \
     --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  데이터베이스 권한이 이미 부여되어 있습니다."
 
-# 강남구 데이터 필터 생성
-echo "   강남구 데이터 필터 생성..."
+# 테이블 기본 권한 (DESCRIBE)
+echo "   테이블 기본 권한 부여 중..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_GANGNAM_ANALYTICS_ROLE_ARN \
+    --resource "Table={DatabaseName=${DATABASE_NAME},Name=${TABLE_NAME}}" \
+    --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  테이블 권한이 이미 부여되어 있습니다."
+
+# 테이블 컬럼 SELECT 권한 (birth_year 제외)
+echo "   테이블 컬럼 SELECT 권한 부여 중 (birth_year 제외)..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_GANGNAM_ANALYTICS_ROLE_ARN \
+    --resource '{
+        "TableWithColumns": {
+            "DatabaseName": "'${DATABASE_NAME}'",
+            "Name": "'${TABLE_NAME}'",
+            "ColumnNames": [
+                "rental_id", "station_id", "station_name", "rental_date", "return_date",
+                "usage_min", "distance_meter", "gender", "user_type", "district"
+            ]
+        }
+    }' \
+    --permissions "SELECT" 2>/dev/null || echo "   ⚠️  테이블 컬럼 권한이 이미 부여되어 있습니다."
+
+# 강남구 데이터 필터 생성 (EMR on EKS FGAC 필수)
+echo "   강남구 데이터 필터 생성 (EMR on EKS FGAC 필수)..."
 GANGNAM_FILTER_NAME="gangnam_analytics_filter"
 
+# 기존 필터 삭제 (있는 경우)
+aws lakeformation delete-data-cells-filter \
+    --region $REGION \
+    --table-catalog-id $ACCOUNT_ID \
+    --database-name $DATABASE_NAME \
+    --table-name $TABLE_NAME \
+    --name $GANGNAM_FILTER_NAME 2>/dev/null || echo "   기존 필터 없음"
+
+# 새 필터 생성 (강남구 필터 적용)
 aws lakeformation create-data-cells-filter \
     --region $REGION \
     --table-data "{
+        \"TableCatalogId\": \"${ACCOUNT_ID}\",
         \"DatabaseName\": \"${DATABASE_NAME}\",
         \"TableName\": \"${TABLE_NAME}\",
         \"Name\": \"${GANGNAM_FILTER_NAME}\",
@@ -144,19 +227,21 @@ aws lakeformation create-data-cells-filter \
         ]
     }" 2>/dev/null || echo "   ⚠️  필터가 이미 존재합니다."
 
-# 필터 권한 부여
-echo "   필터 권한 부여 중..."
+# 필터 권한 부여 (EMR on EKS FGAC 필수)
+echo "   필터 권한 부여 중 (EMR on EKS FGAC 필수)..."
 aws lakeformation grant-permissions \
     --region $REGION \
     --principal DataLakePrincipalIdentifier=$LF_GANGNAM_ANALYTICS_ROLE_ARN \
     --resource "DataCellsFilter={
+        TableCatalogId=${ACCOUNT_ID},
         DatabaseName=${DATABASE_NAME},
         TableName=${TABLE_NAME},
         Name=${GANGNAM_FILTER_NAME}
     }" \
     --permissions "SELECT" 2>/dev/null || echo "   ⚠️  필터 권한이 이미 부여되어 있습니다."
 
-echo "   ✅ GangnamAnalyst: 10개 컬럼 (birth_year 제외), 강남구만 (~3,000건)"
+echo "   ✅ GangnamAnalyst: 10개 컬럼 (birth_year 제외), 강남구만 접근 (~3,000건)"
+
 
 # 4. LF_OperationRole - 운영 데이터만, 개인정보 제외
 echo ""
@@ -170,35 +255,74 @@ aws lakeformation grant-permissions \
     --resource "Database={Name=${DATABASE_NAME}}" \
     --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  데이터베이스 권한이 이미 부여되어 있습니다."
 
-# 운영팀용 컬럼 필터 생성
-echo "   운영팀용 컬럼 필터 생성..."
+# 테이블 기본 권한 (DESCRIBE)
+echo "   테이블 기본 권한 부여 중..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_OPERATION_ROLE_ARN \
+    --resource "Table={DatabaseName=${DATABASE_NAME},Name=${TABLE_NAME}}" \
+    --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  테이블 권한이 이미 부여되어 있습니다."
+
+# 테이블 컬럼 SELECT 권한 (birth_year, gender 제외)
+echo "   테이블 컬럼 SELECT 권한 부여 중 (birth_year, gender 제외)..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_OPERATION_ROLE_ARN \
+    --resource '{
+        "TableWithColumns": {
+            "DatabaseName": "'${DATABASE_NAME}'",
+            "Name": "'${TABLE_NAME}'",
+            "ColumnNames": [
+                "rental_id", "station_id", "station_name", "rental_date", "return_date",
+                "usage_min", "distance_meter", "user_type", "district"
+            ]
+        }
+    }' \
+    --permissions "SELECT" 2>/dev/null || echo "   ⚠️  테이블 컬럼 권한이 이미 부여되어 있습니다."
+
+# 운영팀용 컬럼 필터 생성 (EMR on EKS FGAC 필수)
+echo "   운영팀용 컬럼 필터 생성 (EMR on EKS FGAC 필수)..."
 OPERATION_FILTER_NAME="operation_team_filter"
 
+# 기존 필터 삭제 (있는 경우)
+aws lakeformation delete-data-cells-filter \
+    --region $REGION \
+    --table-catalog-id $ACCOUNT_ID \
+    --database-name $DATABASE_NAME \
+    --table-name $TABLE_NAME \
+    --name $OPERATION_FILTER_NAME 2>/dev/null || echo "   기존 필터 없음"
+
+# 새 필터 생성 (TableCatalogId 포함)
 aws lakeformation create-data-cells-filter \
     --region $REGION \
     --table-data "{
+        \"TableCatalogId\": \"${ACCOUNT_ID}\",
         \"DatabaseName\": \"${DATABASE_NAME}\",
         \"TableName\": \"${TABLE_NAME}\",
         \"Name\": \"${OPERATION_FILTER_NAME}\",
+        \"RowFilter\": {
+            \"FilterExpression\": \"TRUE\"
+        },
         \"ColumnNames\": [
             \"rental_id\", \"station_id\", \"station_name\", \"rental_date\", \"return_date\",
             \"usage_min\", \"distance_meter\", \"user_type\", \"district\"
         ]
     }" 2>/dev/null || echo "   ⚠️  필터가 이미 존재합니다."
 
-# 필터 권한 부여
-echo "   필터 권한 부여 중..."
+# 필터 권한 부여 (EMR on EKS FGAC 필수)
+echo "   필터 권한 부여 중 (EMR on EKS FGAC 필수)..."
 aws lakeformation grant-permissions \
     --region $REGION \
     --principal DataLakePrincipalIdentifier=$LF_OPERATION_ROLE_ARN \
     --resource "DataCellsFilter={
+        TableCatalogId=${ACCOUNT_ID},
         DatabaseName=${DATABASE_NAME},
         TableName=${TABLE_NAME},
         Name=${OPERATION_FILTER_NAME}
     }" \
     --permissions "SELECT" 2>/dev/null || echo "   ⚠️  필터 권한이 이미 부여되어 있습니다."
 
-echo "   ✅ Operation: 9개 컬럼 (birth_year, gender 제외), 전체 구 (100,000건)"
+echo "   ✅ Operation: 9개 컬럼 (birth_year, gender 제외), 전체 구 접근 가능 + 운영 필터 (선택적)"
 
 # 5. LF_MarketingPartnerRole - 강남구 20-30대만, 마케팅 관련
 echo ""
@@ -212,13 +336,48 @@ aws lakeformation grant-permissions \
     --resource "Database={Name=${DATABASE_NAME}}" \
     --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  데이터베이스 권한이 이미 부여되어 있습니다."
 
-# 마케팅 파트너용 다차원 필터 생성 (강남구 + 20-30대)
-echo "   마케팅 파트너용 다차원 필터 생성 (강남구 + 20-30대)..."
+# 테이블 기본 권한 (DESCRIBE)
+echo "   테이블 기본 권한 부여 중..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_MARKETING_PARTNER_ROLE_ARN \
+    --resource "Table={DatabaseName=${DATABASE_NAME},Name=${TABLE_NAME}}" \
+    --permissions "DESCRIBE" 2>/dev/null || echo "   ⚠️  테이블 권한이 이미 부여되어 있습니다."
+
+# 테이블 컬럼 SELECT 권한 (birth_year 제외)
+echo "   테이블 컬럼 SELECT 권한 부여 중 (birth_year 제외)..."
+aws lakeformation grant-permissions \
+    --region $REGION \
+    --principal DataLakePrincipalIdentifier=$LF_MARKETING_PARTNER_ROLE_ARN \
+    --resource '{
+        "TableWithColumns": {
+            "DatabaseName": "'${DATABASE_NAME}'",
+            "Name": "'${TABLE_NAME}'",
+            "ColumnNames": [
+                "rental_id", "station_id", "station_name", "rental_date", "return_date",
+                "usage_min", "distance_meter", "gender", "user_type", "district"
+            ]
+        }
+    }' \
+    --permissions "SELECT" 2>/dev/null || echo "   ⚠️  테이블 컬럼 권한이 이미 부여되어 있습니다."
+
+# 마케팅 파트너용 다차원 필터 생성 (EMR on EKS FGAC 필수 - 강남구 + 20-30대)
+echo "   마케팅 파트너용 다차원 필터 생성 (EMR on EKS FGAC 필수 - 강남구 + 20-30대)..."
 MARKETING_FILTER_NAME="marketing_partner_filter"
 
+# 기존 필터 삭제 (있는 경우)
+aws lakeformation delete-data-cells-filter \
+    --region $REGION \
+    --table-catalog-id $ACCOUNT_ID \
+    --database-name $DATABASE_NAME \
+    --table-name $TABLE_NAME \
+    --name $MARKETING_FILTER_NAME 2>/dev/null || echo "   기존 필터 없음"
+
+# 새 필터 생성 (TableCatalogId 포함)
 aws lakeformation create-data-cells-filter \
     --region $REGION \
     --table-data "{
+        \"TableCatalogId\": \"${ACCOUNT_ID}\",
         \"DatabaseName\": \"${DATABASE_NAME}\",
         \"TableName\": \"${TABLE_NAME}\",
         \"Name\": \"${MARKETING_FILTER_NAME}\",
@@ -231,19 +390,20 @@ aws lakeformation create-data-cells-filter \
         ]
     }" 2>/dev/null || echo "   ⚠️  필터가 이미 존재합니다."
 
-# 필터 권한 부여
-echo "   필터 권한 부여 중..."
+# 필터 권한 부여 (EMR on EKS FGAC 필수)
+echo "   필터 권한 부여 중 (EMR on EKS FGAC 필수)..."
 aws lakeformation grant-permissions \
     --region $REGION \
     --principal DataLakePrincipalIdentifier=$LF_MARKETING_PARTNER_ROLE_ARN \
     --resource "DataCellsFilter={
+        TableCatalogId=${ACCOUNT_ID},
         DatabaseName=${DATABASE_NAME},
         TableName=${TABLE_NAME},
         Name=${MARKETING_FILTER_NAME}
     }" \
     --permissions "SELECT" 2>/dev/null || echo "   ⚠️  필터 권한이 이미 부여되어 있습니다."
 
-echo "   ✅ MarketingPartner: 10개 컬럼 (birth_year 제외), 강남구 20-30대만 (~1,650건)"
+echo "   ✅ MarketingPartner: 10개 컬럼 (birth_year 제외), 전체 구 접근 가능 + 강남구 20-30대 필터 (선택적)"
 
 # 6. 데이터 위치 권한 설정
 echo ""
@@ -333,25 +493,57 @@ echo ""
 echo "=== Lake Formation FGAC 권한 설정 완료 (Iceberg) ==="
 echo ""
 echo "📊 설정된 권한 요약:"
-echo "┌─────────────────────────┬──────────┬─────────────┬─────────────┬──────────────┐"
-echo "│ 역할                    │ 접근구역 │ 연령대      │ 접근컬럼    │ 예상결과     │"
-echo "├─────────────────────────┼──────────┼─────────────┼─────────────┼──────────────┤"
-echo "│ LF_DataStewardRole      │ 전체구   │ 전체        │ 전체 11개   │ 100,000건    │"
-echo "│ LF_GangnamAnalyticsRole │ 강남구   │ 전체        │ 10개(개인정보제외) │ ~3,000건 │"
-echo "│ LF_OperationRole        │ 전체구   │ 전체        │ 9개(운영관련만) │ 100,000건 │"
-echo "│ LF_MarketingPartnerRole │ 강남구   │ 20-30대     │ 10개(마케팅관련) │ ~1,650건 │"
-echo "└─────────────────────────┴──────────┴─────────────┴─────────────┴──────────────┘"
+echo "┌─────────────────────────┬──────────┬─────────────┬─────────────┬──────────────┬─────────────────┐"
+echo "│ 역할                    │ 접근구역 │ 연령대      │ 접근컬럼    │ 예상결과     │ 세밀한제어      │"
+echo "├─────────────────────────┼──────────┼─────────────┼─────────────┼──────────────┼─────────────────┤"
+echo "│ LF_DataStewardRole      │ 전체구   │ 전체        │ 전체 11개   │ 100,000건    │ FullAccess 필터 │"
+echo "│ LF_GangnamAnalyticsRole │ 강남구만 │ 전체        │ 10개(개인정보제외) │ ~3,000건  │ 강남구 필터     │"
+echo "│ LF_OperationRole        │ 전체구   │ 전체        │ 9개(운영관련만) │ 100,000건 │ 운영 필터       │"
+echo "│ LF_MarketingPartnerRole │ 강남구만 │ 20-30대만   │ 10개(마케팅관련) │ ~2,000건 │ 강남구+20-30대  │"
+echo "└─────────────────────────┴──────────┴─────────────┴─────────────┴──────────────┴─────────────────┘"
 echo ""
-echo "🔑 핵심 FGAC 기능 (Iceberg):"
-echo "   • Row-level 필터링: 지역별 (강남구) + 연령대별 (20-30대)"
-echo "   • Column-level 필터링: 역할별 컬럼 접근 제어"
-echo "   • Cell-level 필터링: 다차원 조건 (지역 + 연령대)"
-echo "   • Glue Catalog: $DATABASE_NAME.$TABLE_NAME"
+echo "🔑 핵심 FGAC 기능 (Iceberg) - EMR on EKS FGAC 권한 구조:"
+echo "   📋 1단계 - 기본 테이블 접근 (Data Cells Filter 방식):"
+echo "      • 모든 역할이 Data Cells Filter를 통해 테이블에 접근"
+echo "      • DataSteward: FullAccess 필터 (전체 데이터 + 전체 컬럼)"
+echo "      • 다른 역할: 역할별 컬럼/행 필터링 적용"
+echo ""
+echo "   🎯 2단계 - 데이터 셀 필터 (DataCellsFilter - EMR on EKS FGAC 필수):"
+echo "      • GangnamAnalytics: 강남구만 + birth_year 제외한 10개 컬럼 접근"
+echo "      • Operation: 전체 구 + birth_year, gender 제외한 9개 컬럼 접근"
+echo "      • MarketingPartner: 강남구 + 20-30대 다차원 필터 + birth_year 제외"
+echo ""
+echo "   💡 EMR on EKS FGAC 권한 적용 방식:"
+echo "      • 기본 접근: TableWithColumns SELECT (필수)"
+echo "      • 세밀한 제어: DataCellsFilter SELECT (EMR on EKS FGAC 필수)"
+echo "      • 데이터 셀 필터 없이는 EMR on EKS에서 접근 불가"
+echo "      • TableCatalogId 포함하여 필터 생성 필수"
 echo ""
 echo "🏗️ 사용된 리소스:"
 echo "   • S3 버킷: $ICEBERG_BUCKET_NAME"
 echo "   • Glue 데이터베이스: $DATABASE_NAME"
 echo "   • Glue 테이블: $TABLE_NAME"
 echo "   • 테이블 형식: Apache Iceberg"
+echo ""
+
+# 9. Data Cells Filter 확인
+echo "9. 생성된 Data Cells Filter 확인..."
+echo ""
+echo "📊 생성된 Data Cells Filter 목록:"
+aws lakeformation list-data-cells-filter \
+    --region $REGION \
+    --table "{
+        \"CatalogId\": \"${ACCOUNT_ID}\",
+        \"DatabaseName\": \"${DATABASE_NAME}\",
+        \"Name\": \"${TABLE_NAME}\"
+    }" \
+    --query 'DataCellsFilters[].{
+        Name: Name,
+        RowFilter: RowFilter.FilterExpression,
+        ColumnCount: length(ColumnNames),
+        HasColumnWildcard: ColumnWildcard != null
+    }' \
+    --output table 2>/dev/null || echo "   ⚠️  Data Cells Filter 조회 실패"
+
 echo ""
 echo "✅ 다음 단계: ./scripts/05-setup-emr-on-eks.sh"

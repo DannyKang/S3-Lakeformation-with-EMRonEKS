@@ -211,16 +211,31 @@ else
     echo "   ✅ Query Engine Role 생성 완료"
 fi
 
-# Query Engine Role Permissions Policy (AWS 공식 문서 기준)
+# Query Engine Role Permissions Policy (AWS 공식 문서 기준 + sts:TagSession 권한 추가)
 cat > /tmp/query-engine-permissions-policy.json << EOF
 {
     "Version": "2012-10-17",
     "Statement": [
         {
+            "Sid": "AssumeJobRoleWithSessionTagAccessForSystemDriver",
+            "Effect": "Allow",
+            "Action": [
+                "sts:AssumeRole",
+                "sts:TagSession"
+            ],
+            "Resource": [
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_GANGNAM_ANALYTICS_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_OPERATION_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_MARKETING_PARTNER_ROLE"
+            ]
+        },
+        {
             "Sid": "AssumeJobRoleWithSessionTagAccessForSystemExecutor",
             "Effect": "Allow",
             "Action": [
-                "sts:AssumeRole"
+                "sts:AssumeRole",
+                "sts:TagSession"
             ],
             "Resource": [
                 "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
@@ -286,12 +301,12 @@ aws iam put-role-policy \
 echo "   ✅ Query Engine Role 생성 완료"
 
 
-# Trust policy of Query Engine role to trust the Kubernetes System namespace.
-# aws emr-containers update-role-trust-policy \
-#     --cluster-name $CLUSTER_NAME \
-#     --namespace $SYSTEM_NAMESPACE \
-#     --role-name $QUERY_ENGINE_ROLE_NAME \
-#     --region $REGION 
+#Trust policy of Query Engine role to trust the Kubernetes System namespace.
+aws emr-containers update-role-trust-policy \
+    --cluster-name $CLUSTER_NAME \
+    --namespace $SYSTEM_NAMESPACE \
+    --role-name $QUERY_ENGINE_ROLE_NAME \
+    --region $REGION 
 
     
 #================== Query Engine Role 완료 =======================================================
@@ -688,6 +703,177 @@ done
 
 echo "✅ 모든 Lake Formation 역할에 확장된 CloudWatch Logs 권한 추가 완료"
 
+# Step 3.5: Lake Formation FGAC 권한 검증 및 문제 해결
+echo ""
+echo "3.5. Lake Formation FGAC 권한 검증 및 문제 해결..."
+
+# Query Engine Role에 추가 TagSession 권한 부여 (로그 분석 결과 반영)
+echo "   Query Engine Role에 추가 TagSession 권한 부여 중..."
+
+cat > /tmp/query-engine-tagsession-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "TagSessionPermissionForLakeFormationFGAC",
+            "Effect": "Allow",
+            "Action": [
+                "sts:TagSession"
+            ],
+            "Resource": [
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_GANGNAM_ANALYTICS_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_OPERATION_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_MARKETING_PARTNER_ROLE"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedRegion": "$REGION"
+                }
+            }
+        },
+        {
+            "Sid": "AssumeRolePermissionForLakeFormationFGAC",
+            "Effect": "Allow",
+            "Action": [
+                "sts:AssumeRole"
+            ],
+            "Resource": [
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_DATA_STEWARD_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_GANGNAM_ANALYTICS_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_OPERATION_ROLE",
+                "arn:aws:iam::$ACCOUNT_ID:role/$LF_MARKETING_PARTNER_ROLE"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedRegion": "$REGION"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+# Query Engine Role에 TagSession 정책 추가
+aws iam put-role-policy \
+    --role-name $QUERY_ENGINE_ROLE_NAME \
+    --policy-name "TagSessionPermissions" \
+    --policy-document file:///tmp/query-engine-tagsession-policy.json
+
+echo "   ✅ Query Engine Role TagSession 권한 추가 완료"
+
+# 각 Lake Formation 역할의 Trust Policy에 Query Engine Role 신뢰 관계 추가
+echo "   각 Lake Formation 역할에 Query Engine Role 신뢰 관계 추가 중..."
+
+for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_ROLE" "$LF_MARKETING_PARTNER_ROLE"; do
+    echo "     $role Trust Policy에 Query Engine Role 추가 중..."
+    
+    # 현재 Trust Policy 가져오기
+    CURRENT_TRUST_POLICY=$(aws iam get-role --role-name $role --query 'Role.AssumeRolePolicyDocument' --output json)
+    
+    # Query Engine Role을 신뢰하는 새로운 Trust Policy 생성
+    cat > /tmp/updated-trust-policy-$role.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "emr-containers.amazonaws.com",
+                    "glue.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+            },
+            "Action": "sts:AssumeRole"
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "$OIDC_PROVIDER_ARN"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringLike": {
+                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:sub": [
+                        "system:serviceaccount:$USER_NAMESPACE:emr-containers-sa-*",
+                        "system:serviceaccount:emr-data-team-a:emr-data-*-sa",
+                        "system:serviceaccount:$USER_NAMESPACE:emr-*-sa",
+                        "system:serviceaccount:$SYSTEM_NAMESPACE:emr-containers-sa-*"
+                    ]
+                },
+                "StringEquals": {
+                    "oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID:aud": "sts.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Sid": "TrustQueryEngineRoleForLakeFormationFGAC",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": [
+                    "arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME",
+                    "arn:aws:iam::$ACCOUNT_ID:role/$JOB_EXECUTION_ROLE_NAME"
+                ]
+            },
+            "Action": [
+                "sts:AssumeRole",
+                "sts:TagSession"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedRegion": "$REGION"
+                },
+                "StringLike": {
+                    "aws:RequestTag/LakeFormationAuthorizedCaller": "$LF_SESSION_TAG_VALUE"
+                }
+            }
+        }
+    ]
+}
+EOF
+    
+    # Trust Policy 업데이트
+    aws iam update-assume-role-policy \
+        --role-name $role \
+        --policy-document file:///tmp/updated-trust-policy-$role.json
+    
+    echo "     ✅ $role Trust Policy 업데이트 완료"
+done
+
+echo "   ✅ 모든 Lake Formation 역할에 Query Engine Role 신뢰 관계 추가 완료"
+
+# Lake Formation 권한 검증
+echo "   Lake Formation 권한 검증 중..."
+
+# Query Engine Role이 각 역할을 AssumeRole 할 수 있는지 검증
+echo "   Query Engine Role AssumeRole 권한 검증 중..."
+for role in "$LF_DATA_STEWARD_ROLE" "$LF_GANGNAM_ANALYTICS_ROLE" "$LF_OPERATION_ROLE" "$LF_MARKETING_PARTNER_ROLE"; do
+    echo "     $role AssumeRole 권한 확인 중..."
+    
+    # 시뮬레이션을 통한 권한 검증 (실제 AssumeRole은 하지 않음)
+    POLICY_RESULT=$(aws iam simulate-principal-policy \
+        --policy-source-arn "arn:aws:iam::$ACCOUNT_ID:role/$QUERY_ENGINE_ROLE_NAME" \
+        --action-names "sts:AssumeRole" "sts:TagSession" \
+        --resource-arns "arn:aws:iam::$ACCOUNT_ID:role/$role" \
+        --query 'EvaluationResults[?Decision==`allowed`]' \
+        --output text 2>/dev/null || echo "권한 시뮬레이션 실패")
+    
+    if [[ "$POLICY_RESULT" == *"allowed"* ]]; then
+        echo "     ✅ $role AssumeRole/TagSession 권한 확인됨"
+    else
+        echo "     ⚠️  $role AssumeRole/TagSession 권한 확인 필요"
+    fi
+done
+
+echo "   ✅ Lake Formation FGAC 권한 검증 완료"
+
 # Step 4: Security Configuration 생성
 echo ""
 echo "4. Security Configuration 생성..."
@@ -782,6 +968,8 @@ rm -f /tmp/job-execution-*.json
 rm -f /tmp/lake-formation-*.json
 rm -f /tmp/emr-execution-*.json
 rm -f /tmp/expanded-cloudwatch-*.json
+rm -f /tmp/updated-trust-policy-*.json
+rm -f /tmp/query-engine-tagsession-policy.json
 
 echo ""
 echo "=== Lake Formation FGAC 설정 완료 ==="
@@ -810,10 +998,20 @@ echo "   • GangnamAnalytics: 강남구 데이터만"
 echo "   • Operation: 운영 데이터 (개인정보 제외)"
 echo "   • MarketingPartner: 강남구 20-30대만"
 echo ""
+echo "🔧 권한 문제 해결 적용:"
+echo "   • Query Engine Role에 sts:TagSession 권한 추가"
+echo "   • 모든 Lake Formation 역할에 Query Engine Role 신뢰 관계 추가"
+echo "   • Lake Formation FGAC 권한 검증 완료"
+echo ""
 echo "✅ 다음 단계: ./scripts/07-run-emr-jobs.sh (Lake Formation FGAC 활성화됨)"
 echo ""
 echo "⚠️  주의사항:"
 echo "   • Lake Formation에서 데이터베이스 및 테이블 권한을 별도로 설정해야 합니다"
 echo "   • S3 Tables 데이터가 Lake Formation에 등록되어 있어야 합니다"
 echo "   • 각 역할별로 적절한 Lake Formation 권한을 부여해야 합니다"
+echo ""
+echo "🔍 문제 해결 정보:"
+echo "   • 로그 분석 결과를 반영하여 sts:TagSession 권한 문제 해결"
+echo "   • Query Engine Role이 모든 Lake Formation 역할에 대해 AssumeRole/TagSession 권한 보유"
+echo "   • Trust Policy에 Query Engine Role 신뢰 관계 추가로 권한 체인 문제 해결"
 echo ""

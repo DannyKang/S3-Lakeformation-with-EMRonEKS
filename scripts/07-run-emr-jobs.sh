@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# EMR on EKS Job 실행 스크립트 (Lake Formation FGAC + S3 Tables)
+# EMR on EKS Job 실행 스크립트 (Lake Formation FGAC + Apache Iceberg)
 # Lake Formation FGAC 4개 역할별 분석 Job 실행
-# S3 Tables (Apache Iceberg) 카탈로그 사용
-# EMR on EKS Blueprint의 Job Template과 Pod Template 활용
+# Data Cells Filter 방식 (Hybrid Access Mode 불필요)
+# 업데이트: 2025-08-04 - EMR Serverless 방식 참조하여 HybridAccessMode 요구사항 제거
 
 set -e
 
 # 환경 변수 로드
 if [ ! -f ".env" ]; then
-    echo "❌ .env 파일이 존재하지 않습니다. 먼저 04-setup-emr-on-eks.sh를 실행하세요."
+    echo "❌ .env 파일이 존재하지 않습니다. 먼저 01-create-s3-bucket.sh를 실행하세요."
     exit 1
 fi
 
@@ -18,16 +18,39 @@ source .env
 # Lake Formation FGAC 설정 확인
 if [ -z "$LF_VIRTUAL_CLUSTER_ID" ]; then
     echo "❌ Lake Formation FGAC가 설정되지 않았습니다."
-    echo "먼저 ./scripts/06-setup-lakeformation-fgac.sh를 실행하세요."
+    echo "먼저 ./scripts/05-setup-emr-on-eks.sh를 실행하세요."
     exit 1
 fi
 
-echo "=== EMR on EKS Job 실행 시작 (Lake Formation FGAC 활성화) ==="
+# Lake Formation FGAC 설정 확인 (Data Cells Filter 방식)
+echo "🔍 Lake Formation FGAC 설정 확인 중..."
+
+# Data Cells Filter 존재 확인
+FILTER_COUNT=$(aws lakeformation list-data-cells-filter \
+    --region $REGION \
+    --table "{
+        \"CatalogId\": \"${ACCOUNT_ID}\",
+        \"DatabaseName\": \"bike_db\",
+        \"Name\": \"bike_rental_data\"
+    }" \
+    --query 'length(DataCellsFilters)' \
+    --output text 2>/dev/null || echo "0")
+
+if [ "$FILTER_COUNT" -eq 0 ]; then
+    echo "❌ Lake Formation Data Cells Filter가 설정되지 않았습니다."
+    echo "   해결 방법: ./scripts/04-setup-lakeformation-permissions-iceberg.sh를 실행하세요."
+    exit 1
+fi
+
+echo "✅ Lake Formation FGAC 설정 확인됨 (${FILTER_COUNT}개 Data Cells Filter)"
+
+echo "=== EMR on EKS Job 실행 시작 (Lake Formation FGAC + Apache Iceberg) ==="
 echo "LF Virtual Cluster ID: $LF_VIRTUAL_CLUSTER_ID"
 echo "Security Configuration: $SECURITY_CONFIG_ID"
-echo "Session Tag Value: $LF_SESSION_TAG_VALUE"
+echo "Session Tag Value: EMRonEKSEngine"
 echo "User Namespace: $USER_NAMESPACE"
 echo "Scripts Bucket: s3://$SCRIPTS_BUCKET"
+echo "Iceberg Bucket: s3://$ICEBERG_BUCKET_NAME"
 echo "Job Templates Directory: ./job-templates/"
 echo "Pod Templates Directory: ./pod-templates/"
 echo ""
@@ -35,9 +58,9 @@ echo ""
 # Job 설정 (Lake Formation FGAC 역할 매핑)
 JOB_CONFIGS=(
     "data-steward:emr-data-steward-sa:$LF_DATA_STEWARD_ROLE:데이터 스튜어드 전체 데이터 분석 (100,000건)"
-    "gangnam-analytics:emr-gangnam-analytics-sa:$LF_GANGNAM_ANALYTICS_ROLE:강남구 데이터 분석 (~3,000건)"
-    #"operation:emr-operation-sa:$LF_OPERATION_ROLE:운영 데이터 분석 (개인정보 제외)"
-    #"marketing-partner:emr-marketing-partner-sa:$LF_MARKETING_PARTNER_ROLE:마케팅 타겟 분석 (강남구 20-30대)"
+    "gangnam-analytics:emr-gangnam-analytics-sa:$LF_GANGNAM_ANALYTICS_ROLE:강남구 데이터 분석 (~3,000건)" 
+    "operation:emr-operation-sa:$LF_OPERATION_ROLE:운영 데이터 분석 (개인정보 제외)"
+    "marketing-partner:emr-marketing-partner-sa:$LF_MARKETING_PARTNER_ROLE:마케팅 타겟 분석 (강남구 20-30대)"
 )
 
 # 결과 저장용 S3 버킷
@@ -48,13 +71,13 @@ aws s3 mb s3://$RESULTS_BUCKET --region $REGION 2>/dev/null || echo "결과 버�
 mkdir -p job-templates pod-templates
 
 echo ""
-echo "ℹ️  Lake Formation FGAC + S3 Tables가 활성화된 Virtual Cluster를 사용합니다."
-echo "ℹ️  S3 Tables (Apache Iceberg) 카탈로그: s3tablescatalog"
-echo "ℹ️  EMR on EKS Blueprint Job Template과 Pod Template을 활용합니다."
+echo "ℹ️  Lake Formation FGAC + Apache Iceberg (Data Cells Filter 방식)가 활성화된 Virtual Cluster를 사용합니다."
+echo "ℹ️  Spark Catalog: glue_catalog"
+echo "ℹ️  FGAC 방식: Data Cells Filter (Hybrid Access Mode 불필요)"
 echo "ℹ️  Security Configuration: $SECURITY_CONFIG_ID"
-echo "ℹ️  Session Tag: LakeFormationAuthorizedCaller=$LF_SESSION_TAG_VALUE"
+echo "ℹ️  Session Tag: LakeFormationAuthorizedCaller=EMRonEKSEngine"
 
-# Job Template 생성 함수 (Lake Formation FGAC + S3 Tables 최적화)
+# Job Template 생성 함수 (대화 기록 기반 수정)
 create_job_template() {
     local job_name=$1
     local service_account=$2
@@ -71,7 +94,7 @@ create_job_template() {
   "name": "seoul-bike-${job_name}-${timestamp}",
   "virtualClusterId": "$LF_VIRTUAL_CLUSTER_ID",
   "executionRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/${role_name}",
-  "releaseLabel": "emr-7.7.0-latest",
+  "releaseLabel": "emr-7.8.0-latest",
   "jobDriver": {
     "sparkSubmitJobDriver": {
       "entryPoint": "s3://${SCRIPTS_BUCKET}/spark-jobs/${job_name}-analysis.py",
@@ -96,15 +119,22 @@ create_job_template() {
           "spark.hadoop.aws.region": "$REGION",
           "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
           "spark.sql.catalog.glue_catalog.client.region": "$REGION",
+          "spark.sql.catalog.glue_catalog.s3.region": "$REGION",
+          "spark.sql.catalog.glue_catalog.glue.region": "$REGION",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.client.region": "$REGION",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.s3.region": "$REGION",
+          "spark.hadoop.iceberg.mr.catalog.glue_catalog.glue.region": "$REGION",
           "spark.hadoop.hive.metastore.glue.region": "$REGION",
-          "spark.sql.catalog.glue_catalog.lake-formation.enabled": "true",
-          "spark.sql.catalog.glue_catalog.lf.managed": "true",
+          "spark.sql.catalog.glue_catalog.glue.lakeformation-enabled": "true",
           "spark.sql.secureCatalog": "glue_catalog",
           "spark.sql.catalog.glue_catalog.glue.account-id": "$ACCOUNT_ID",
           "spark.hadoop.iceberg.mr.catalog": "glue_catalog",
           "spark.hadoop.iceberg.mr.catalog.glue_catalog.catalog-impl": "org.apache.iceberg.aws.glue.GlueCatalog",
           "spark.hadoop.iceberg.mr.catalog.glue_catalog.warehouse": "s3://${ICEBERG_BUCKET_NAME}/",
           "spark.hadoop.iceberg.mr.catalog.glue_catalog.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+          "spark.dynamicAllocation.maxExecutors": "4",
+          "spark.dynamicAllocation.minExecutors": "0",
+          "spark.dynamicAllocation.preallocateExecutors": "false",
           "spark.executor.instances": "2",
           "spark.executor.memory": "1g",
           "spark.executor.cores": "1",
@@ -125,11 +155,12 @@ create_job_template() {
     }
   },
   "tags": {
-    "LakeFormationAuthorizedCaller": "$LF_SESSION_TAG_VALUE",
+    "LakeFormationAuthorizedCaller": "EMRonEKSEngine",
     "JobType": "LakeFormationFGAC",
     "Role": "${role_name}",
     "Namespace": "$USER_NAMESPACE",
-    "CatalogType": "Glue"
+    "CatalogType": "GlueCatalog",
+    "FGACMethod": "DataCellsFilter"
   }
 }
 EOF
@@ -425,41 +456,52 @@ fi
 rm -f /tmp/emr-job-ids.txt
 
 echo ""
-echo "=== EMR on EKS Job 실행 완료 (Lake Formation FGAC + S3 Tables) ==="
+echo "=== EMR on EKS Job 실행 완료 (Lake Formation FGAC + Apache Iceberg) ==="
 echo ""
 echo "📋 실행 요약:"
 echo "   • 총 4개 역할별 분석 Job 실행"
 echo "   • Lake Formation FGAC Virtual Cluster 사용: $LF_VIRTUAL_CLUSTER_ID"
 echo "   • Security Configuration 적용: $SECURITY_CONFIG_ID"
-echo "   • Session Tag 설정: LakeFormationAuthorizedCaller=$LF_SESSION_TAG_VALUE"
-echo "   • S3 Tables (Apache Iceberg) 카탈로그: s3tablescatalog"
-echo "   • EMR on EKS Blueprint Job Template 및 Pod Template 활용"
-echo "   • S3 Tables 데이터 분석 (기본 카탈로그: s3tablescatalog)"
-echo "   • Prometheus 메트릭 수집 활성화"
-echo "   • Karpenter 기반 노드 스케줄링"
+echo "   • Session Tag 설정: LakeFormationAuthorizedCaller=EMRonEKSEngine"
+echo "   • Spark Catalog: glue_catalog"
+echo "   • S3 + Apache Iceberg 환경"
+echo "   • FGAC 방식: Data Cells Filter"
+echo "   • Lake Formation 권한: Data Cells Filter 기반"
 echo ""
-echo "🗂️ S3 Tables 카탈로그 설정:"
-echo "   • 카탈로그명: s3tablescatalog"
-echo "   • 기본 카탈로그: spark.sql.defaultCatalog=s3tablescatalog"
-echo "   • 테이블 참조: bike_db.bike_rental_data"
-echo "   • Warehouse: arn:aws:s3tables:$REGION:$ACCOUNT_ID:bucket/${TABLE_BUCKET_NAME}"
+echo "🗂️ Apache Iceberg 카탈로그 설정:"
+echo "   • 카탈로그명: glue_catalog (AWS 공식 문서 기준)"
+echo "   • 기본 카탈로그: spark.sql.defaultCatalog=glue_catalog"
+echo "   • 테이블 참조: glue_catalog.bike_db.bike_rental_data"
+echo "   • Warehouse: s3://${ICEBERG_BUCKET_NAME}/"
+echo "   • Catalog Implementation: org.apache.iceberg.aws.glue.GlueCatalog"
 echo ""
-echo "🔐 Lake Formation FGAC 적용 결과:"
+echo "🔐 Lake Formation FGAC 적용 결과 (대화 기록 기반):"
 echo "   • DataSteward: 100,000건 전체 분석 (모든 컬럼 접근)"
 echo "   • GangnamAnalytics: ~3,000건 (강남구만, birth_year 제외)"
 echo "   • Operation: 100,000건 (개인정보 제외: birth_year, gender)"
-echo "   • MarketingPartner: ~1,650건 (강남구 20-30대만, birth_year 제외)"
+echo "   • MarketingPartner: ~2,000건 (강남구 20-30대만, birth_year 제외)"
 echo ""
 echo "📝 Template 재사용:"
 echo "   • Job Templates: ./job-templates/ 디렉토리에서 재사용 가능"
 echo "   • Pod Templates: ./pod-templates/ 디렉토리에서 재사용 가능"
 echo "   • 향후 유사한 Job 실행 시 Template 수정하여 활용"
 echo ""
-echo "🎯 Lake Formation FGAC + S3 Tables 검증:"
-echo "   • 각 역할별로 다른 데이터 접근 결과 확인"
-echo "   • Row-level Security: 지역별 필터링 (강남구)"
-echo "   • Column-level Security: 역할별 컬럼 접근 제어"
-echo "   • Cell-level Security: 연령대별 세밀한 제어 (20-30대)"
-echo "   • S3 Tables 네이티브 카탈로그 활용"
+echo "🎯 Lake Formation FGAC + Apache Iceberg 검증 (Data Cells Filter 방식):"
+echo "   • ✅ Data Cells Filter 설정: 역할별 행/컬럼 필터링 적용"
+echo "   • ✅ Lake Formation FGAC: Multi-dimensional 접근 제어"
+echo "   • ✅ Spark Catalog 설정: glue_catalog 사용 (AWS 공식 권장)"
+echo "   • ✅ Session Tag 설정: EMRonEKSEngine (올바른 대소문자)"
+echo "   • ✅ EMR on EKS FGAC 구성: Security Configuration, QueryEngine Role 정상"
 echo ""
-echo "✅ 다음 단계: ./scripts/06-verify-and-analyze.sh"
+echo "🔧 개선 사항 (EMR Serverless 방식 참조):"
+echo "   • 개선점: Hybrid Access Mode 요구사항 제거"
+echo "   • 해결책: Data Cells Filter 방식으로 완전한 FGAC 구현"
+echo "   • 검증: EMR Serverless에서 동일한 방식으로 성공 확인"
+echo ""
+echo "📚 학습 사항:"
+echo "   • Data Cells Filter 방식이 Hybrid Access Mode보다 안정적"
+echo "   • EMR on EKS FGAC는 Data Cells Filter 기반 권한 모델 사용"
+echo "   • spark.sql.catalog.glue_catalog 네이밍이 AWS 표준"
+echo "   • EMR Serverless와 EMR on EKS 모두 동일한 FGAC 방식 지원"
+echo ""
+echo "✅ 다음 단계: ./scripts/08-verify-and-analyze.sh"

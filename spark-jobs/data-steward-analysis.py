@@ -10,7 +10,7 @@ from pyspark.sql.types import *
 import sys
 
 def create_spark_session():
-    """S3 Tables Lake Formation FGAC 지원 Spark 세션 생성"""
+    """S3 Iceberg Lake Formation FGAC 지원 Spark 세션 생성"""
     return SparkSession.builder \
         .appName("DataSteward-FullAccess-Analysis") \
         .getOrCreate()
@@ -22,17 +22,17 @@ def main():
     spark = create_spark_session()
     
     try:
-        # S3 Tables Lake Formation FGAC를 통해 데이터 읽기
-        print("\n1. S3 Tables Lake Formation FGAC를 통해 데이터 로드 중...")
+        # Iceberg Lake Formation FGAC를 통해 데이터 읽기
+        print("\n1. Iceberg Lake Formation FGAC를 통해 데이터 로드 중...")
         namespace = "bike_db"
         table_name = "bike_rental_data"
         
         print(f"   네임스페이스: {namespace}")
         print(f"   테이블명: {table_name}")
-        print(f"   카탈로그: {namespace}.{table_name} (Glue Catalog with Iceberg JAR)")
+        print(f"   카탈로그: glue_catalog.{namespace}.{table_name}")
         
-        # Hive 메타스토어를 통해 Iceberg 테이블 데이터 읽기
-        df = spark.table(f"{namespace}.{table_name}")
+        # Iceberg 카탈로그를 통해 데이터 읽기
+        df = spark.read.table(f"glue_catalog.{namespace}.{table_name}")
         
         total_records = df.count()
         print(f"✅ 총 레코드 수: {total_records:,}건")

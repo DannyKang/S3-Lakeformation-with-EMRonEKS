@@ -1,13 +1,13 @@
-# Lake Formation FGAC with S3 Iceberg and EMR on EKS
-## 서울시 따릉이 자전거 대여 데이터를 활용한 세밀한 데이터 접근 제어 구현
+# Lake Formation FGAC with S3 Iceberg and EMR Serverless
+## 서울시 따릉이 자전거 대여 데이터를 활용한 세밀한 데이터 접근 제어 구현 (EMR Serverless 버전)
 
 [![AWS](https://img.shields.io/badge/AWS-Lake%20Formation-orange)](https://aws.amazon.com/lake-formation/)
 [![S3 Iceberg](https://img.shields.io/badge/S3%20Iceberg-Apache%20Iceberg-blue)](https://iceberg.apache.org/)
-[![EMR on EKS](https://img.shields.io/badge/EMR%20on%20EKS-Spark-green)](https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/)
+[![EMR Serverless](https://img.shields.io/badge/EMR%20Serverless-Spark-green)](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/)
 
-이 프로젝트는 AWS Lake Formation의 Fine-Grained Access Control(FGAC)을 S3 Iceberg와 EMR on EKS 환경에서 구현하는 완전한 데모입니다. **실제 서울시 따릉이 자전거 대여 데이터 100,000건**을 활용하여 4가지 역할별로 차별화된 데이터 접근 제어를 보여줍니다.
+이 프로젝트는 AWS Lake Formation의 Fine-Grained Access Control(FGAC)을 S3 Iceberg와 **EMR Serverless** 환경에서 구현하는 완전한 데모입니다. **실제 서울시 따릉이 자전거 대여 데이터 100,000건**을 활용하여 4가지 역할별로 차별화된 데이터 접근 제어를 보여줍니다.
 
-## 🏗️ 아키텍처 개요
+## 🏗️ 아키텍처 개요 (EMR Serverless)
 
 ```mermaid
 graph TB
@@ -26,7 +26,8 @@ graph TB
         CF2["Cell Filters"]
     end
     
-    subgraph "EMR on EKS"
+    subgraph "EMR Serverless"
+        APP["Serverless Application<br/>emr-7.8.0"]
         DS["DataSteward Role"]
         GA["GangnamAnalyst Role"]
         OP["Operation Role"]
@@ -35,10 +36,11 @@ graph TB
     
     CSV --> ST
     ST --> LF
-    LF --> DS
-    LF --> GA
-    LF --> OP
-    LF --> MP
+    LF --> APP
+    APP --> DS
+    APP --> GA
+    APP --> OP
+    APP --> MP
 ```
 
 ## 📊 실제 데이터 현황
@@ -119,14 +121,14 @@ MarketingPartner: 10개 컬럼 (birth_year 제외)
 | **LF_OperationRole** | 전체 구 | 전체 | 9개 (운영 관련만) | ❌ | 운영 최적화 | 100,000건 |
 | **LF_MarketingPartnerRole** | 강남구만 | 20-30대만 | 10개 (마케팅 관련) | ❌ | 타겟 마케팅 | ~2,000건 |
 
-## 🚀 단계별 실행 가이드
+## 🚀 단계별 실행 가이드 (EMR Serverless)
 
 ### 사전 준비사항
 
 ```bash
 # 1. 프로젝트 클론
-git clone https://github.com/DannyKang/S3-Tables-LakeFormation-with-EMRonEKS
-cd S3-Tables-LakeFormation-with-EMRonEKS
+git clone https://github.com/DannyKang/S3-Tables-LakeFormation-with-EMRServerless
+cd S3-Tables-LakeFormation-with-EMRServerless
 
 # 2. AWS CLI 설정 (ap-northeast-2 리전 사용)
 aws configure set region ap-northeast-2
@@ -137,12 +139,12 @@ pip install boto3 pandas matplotlib seaborn
 
 ⚠️ **중요**: 
 - 모든 스크립트는 프로젝트 루트 디렉토리에서 실행해야 합니다
-- 스크립트는 **순서대로** 실행해야 합니다 (01 → 02 → 03 → 04 → 05 → 06 → 07)
+- 스크립트는 **순서대로** 실행해야 합니다 (01 → 02 → 03 → 04 → 05 → 06 → 07 → 07-1)
 - 각 단계 완료 후 다음 단계로 진행하세요
 
 ---
 
-## 📋 단계별 실행 순서
+## 📋 단계별 실행 순서 (EMR Serverless)
 
 ### 1단계: S3 Iceberg 버킷 및 환경 설정
 
@@ -154,14 +156,8 @@ pip install boto3 pandas matplotlib seaborn
 **자동 생성되는 리소스**:
 - **S3 버킷**: `seoul-bike-iceberg-{ACCOUNT_ID}-{TIMESTAMP}`
 - **Glue 데이터베이스**: `bike_db`
-- **Athena 결과 버킷**: `aws-athena-query-results-{ACCOUNT_ID}-{REGION}`
-- **환경 설정 파일**: `.env` (모든 스크립트가 공유하는 설정)
-
-**생성되는 .env 파일 내용**:
-- AWS 계정 정보 및 리전 설정
-- S3 Iceberg 버킷 및 테이블 위치 정보
-- 테이블 스키마 및 컬럼 정보
-- Athena 쿼리 결과 저장 위치
+- **테이블 위치**: `s3://버킷명/data/bike_db/bike_rental_data/`
+- **환경 설정 파일**: `.env` (다른 스크립트들이 자동으로 사용)
 
 ⚠️ **중요**: `.env` 파일을 삭제하지 마세요. 모든 스크립트가 이 파일의 설정을 사용합니다.
 
@@ -174,12 +170,10 @@ pip install boto3 pandas matplotlib seaborn
 
 **데이터 적재 과정**:
 1. **로컬 데이터 검증**: `./sample-data/seoul-bike-sample-100k.csv` (100,000건)
-2. **임시 S3 버킷 생성**: CSV 파일 업로드용 임시 버킷
-3. **Iceberg 테이블 생성**: Athena를 통한 Apache Iceberg 테이블 생성
-   - 테이블 형식: Apache Iceberg (Parquet + Snappy 압축)
-   - 11개 컬럼: rental_id, station_id, station_name, rental_date, return_date, usage_min, distance_meter, birth_year, gender, user_type, district
+2. **Iceberg 테이블 생성**: Athena를 통한 Apache Iceberg 테이블 생성
+3. **S3 업로드**: 임시 S3 버킷에 CSV 파일 업로드
 4. **데이터 적재**: INSERT INTO로 Iceberg 테이블에 적재
-5. **검증**: 적재된 데이터 건수 확인 및 임시 버킷 정리
+5. **검증**: 적재된 데이터 건수 확인
 
 **예상 소요 시간**: 5-10분
 
@@ -193,43 +187,26 @@ pip install boto3 pandas matplotlib seaborn
 **생성되는 역할들**:
 - **LF_DataStewardRole**: 데이터 관리자 - 전체 데이터 접근
 - **LF_GangnamAnalyticsRole**: 강남구 분석가 - 강남구 데이터만
-- **LF_OperationRole**: 운영팀 - 운영 데이터만 (개인정보 제외)
+- **LF_OperationRole**: 운영팀 - 운영 데이터만  
 - **LF_MarketingPartnerRole**: 마케팅 파트너 - 강남구 20-30대만
 
-**각 역할의 기본 권한**:
-- S3 Iceberg 버킷 접근 권한
-- Glue Catalog 읽기 권한
-- Lake Formation 기본 권한
-- CloudWatch Logs 권한
-
-⚠️ **참고**: IRSA(IAM Roles for Service Accounts) 신뢰 정책은 5단계에서 추가됩니다.
-
-### 4단계: Lake Formation 기본 권한 설정
+### 4단계: Lake Formation FGAC 권한 설정
 
 ```bash
-# Lake Formation 기본 권한 설정 (Iceberg 테이블)
+# Lake Formation FGAC 권한 설정
 ./scripts/04-setup-lakeformation-permissions-iceberg.sh
 ```
 
 **설정되는 권한**:
-- **Database 권한**: bike_db 데이터베이스 DESCRIBE 권한
-- **Table 권한**: bike_rental_data 테이블 DESCRIBE 권한
+- **Database 권한**: bike_db 데이터베이스 접근 권한
+- **Table 권한**: bike_rental_data 테이블 기본 권한
 - **Data Cells Filter**: 역할별 행/컬럼 필터 생성
-  - DataSteward: 전체 데이터 + 전체 컬럼 (TRUE 필터)
-  - GangnamAnalytics: 강남구 데이터 + birth_year 제외
-  - Operation: 전체 데이터 + birth_year, gender 제외
-  - MarketingPartner: 강남구 20-30대 + birth_year 제외
 - **Location 권한**: S3 Iceberg 버킷 접근 권한
 
-**Multi-dimensional FGAC 구현**:
-- **Row-level**: WHERE 조건을 통한 지역/연령대 필터링
-- **Column-level**: 컬럼 제외를 통한 개인정보 보호
-- **Cell-level**: 복합 조건을 통한 세밀한 접근 제어
-
-### 5단계: EMR on EKS 클러스터 설정
+### 5단계: EMR on EKS 클러스터 설정 (선택사항)
 
 ```bash
-# EMR on EKS 환경 구성 (Blueprint 기반)
+# EMR on EKS 환경 구성 (비교 분석용)
 ./scripts/05-setup-emr-on-eks.sh
 ```
 
@@ -245,26 +222,19 @@ pip install boto3 pandas matplotlib seaborn
 ### 6단계: Lake Formation FGAC 설정
 
 ```bash
-# Lake Formation Fine-Grained Access Control 설정
+# Lake Formation FGAC 세부 설정
 ./scripts/06-setup-lake-formation-fgac.sh
 ```
 
-**FGAC 설정 내용**:
-- **Application Integration Settings**: EMR on EKS 통합 설정
-- **Session Tag**: EMRonEKSEngine 태그 설정
-- **Security Configuration**: EMR 보안 구성 생성
-- **Query Execution Role**: System Driver 역할 설정 (LF_JobExecutionRole)
-- **Query Engine Role**: System Executor 역할 설정 (LF_QueryEngineRole)
-- **EMR Containers RBAC**: Kubernetes ClusterRole 및 ClusterRoleBinding 생성
+**설정되는 FGAC 권한**:
+- **EMR on EKS FGAC**: Virtual Cluster 및 Security Configuration
+- **역할별 세부 권한**: 행/컬럼/셀 수준 접근 제어
+- **Session Tag**: LakeFormationAuthorizedCaller 설정
 
-**AWS 공식 문서 기준 구현**:
-- QueryExecutionRole(System Driver)과 QueryEngineRole(System Executor) 분리
-- EMR on EKS와 Lake Formation 통합을 위한 완전한 설정
-
-### 7단계: EMR on EKS Job 실행
+### 7단계: EMR on EKS Job 실행 (비교용)
 
 ```bash
-# 역할별 EMR on EKS Job 실행
+# 역할별 EMR on EKS Job 실행 (비교 분석용)
 ./scripts/07-run-emr-jobs.sh
 ```
 
@@ -274,13 +244,32 @@ pip install boto3 pandas matplotlib seaborn
 - **operation-analysis**: 시스템 운영 최적화 및 정거장 관리 분석
 - **marketing-partner-analysis**: 강남구 20-30대 타겟 마케팅 분석
 
+### 🆕 7-1단계: EMR Serverless Job 실행 (메인)
+
+```bash
+# 역할별 EMR Serverless Job 실행
+./scripts/07-1-emr-serverless-job-run.sh
+```
+
+**EMR Serverless 특징**:
+- **서버리스 아키텍처**: 인프라 관리 불필요
+- **자동 스케일링**: 워크로드에 따른 자동 리소스 조정
+- **비용 최적화**: 사용한 만큼만 과금
+- **Lake Formation 네이티브 지원**: EMR 7.2.0+ 버전에서 완전 지원
+
+**실행되는 과정**:
+1. **IAM 역할 Trust Policy 업데이트**: EMR Serverless 서비스 추가
+2. **EMR Serverless 애플리케이션 생성**: Lake Formation 활성화
+3. **Job 실행**: 동일한 IAM 역할로 권한 비교 분석
+4. **결과 모니터링**: EMR on EKS vs EMR Serverless 비교
+
 **Job 모니터링**:
 ```bash
-# Job 상태 확인
-aws emr-containers list-job-runs --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --region ap-northeast-2
+# EMR Serverless 애플리케이션 목록
+aws emr-serverless list-applications --region ap-northeast-2
 
 # 특정 Job 상세 정보
-aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --id {JOB_ID} --region ap-northeast-2
+aws emr-serverless get-job-run --application-id {APPLICATION_ID} --job-run-id {JOB_RUN_ID} --region ap-northeast-2
 ```
 
 ### 8단계: 결과 검증 및 분석
@@ -292,40 +281,27 @@ aws emr-containers describe-job-run --virtual-cluster-id {VIRTUAL_CLUSTER_ID} --
 
 **검증 내용**:
 - **FGAC 권한 검증**: 각 역할별 접근 가능한 데이터 확인
-- **Data Cells Filter 확인**: 생성된 필터 목록 및 설정 검증
-- **EMR Job 실행 결과**: Job 상태 및 성능 분석
+- **EMR on EKS vs EMR Serverless 비교**: 권한 처리 방식 차이 분석
+- **결과 분석**: Job 실행 결과 및 성능 분석
 - **리포트 생성**: 역할별 분석 결과 요약
 
-### 9단계: 리소스 정리 (선택사항)
-
-```bash
-# 전체 리소스 정리
-./scripts/10-cleanup-all-resources.sh
-```
-
-**정리되는 리소스**:
-- **EMR on EKS**: Virtual Cluster, Security Configuration
-- **EKS 클러스터**: seoul-bike-emr 클러스터 전체
-- **Lake Formation**: 권한 및 Data Cells Filter
-- **IAM 역할**: 생성된 모든 역할 및 정책
-- **S3 버킷**: Iceberg 데이터 및 임시 버킷
-
-## 📁 프로젝트 구조
+## 📁 프로젝트 구조 (EMR Serverless)
 
 ```
-S3-Tables-LakeFormation-with-EMRonEKS/
-├── README.md                                    # 프로젝트 가이드
+lake-formation-fgac-demo/
+├── README.md                                    # EMR on EKS 버전 가이드
+├── README-serverless.md                         # EMR Serverless 버전 가이드 (이 파일)
 ├── data-dictionary.md                           # 데이터 사전
-├── scripts/                                     # 실행 스크립트 (9단계)
+├── scripts/                                     # 실행 스크립트 (8단계)
 │   ├── 01-create-s3-bucket.sh                  # S3 Iceberg 버킷 생성
 │   ├── 02-load-data-to-iceberg.sh              # 데이터 적재
 │   ├── 03-create-iam-roles.sh                  # IAM 역할 생성
-│   ├── 04-setup-lakeformation-permissions-iceberg.sh # Lake Formation 기본 권한
-│   ├── 05-setup-emr-on-eks.sh                  # EMR on EKS 설정
-│   ├── 06-setup-lake-formation-fgac.sh         # Lake Formation FGAC 설정
-│   ├── 07-run-emr-jobs.sh                      # EMR Job 실행
-│   ├── 08-verify-and-analyze.sh                # 검증 및 분석
-│   └── 10-cleanup-all-resources.sh             # 리소스 정리
+│   ├── 04-setup-lakeformation-permissions-iceberg.sh # Lake Formation FGAC 권한
+│   ├── 05-setup-emr-on-eks.sh                  # EMR on EKS 설정 (선택사항)
+│   ├── 06-setup-lake-formation-fgac.sh         # Lake Formation FGAC 세부 설정
+│   ├── 07-run-emr-jobs.sh                      # EMR on EKS Job 실행 (비교용)
+│   ├── 07-1-emr-serverless-job-run.sh          # 🆕 EMR Serverless Job 실행 (메인)
+│   └── 08-verify-and-analyze.sh                # 검증 및 분석
 ├── spark-jobs/                                 # Spark 분석 코드 (4개 역할)
 │   ├── data-steward-analysis.py                # 데이터 관리자 분석
 │   ├── gangnam-analytics-analysis.py           # 강남구 분석가 분석
@@ -335,8 +311,6 @@ S3-Tables-LakeFormation-with-EMRonEKS/
 │   ├── seoul-bike-sample-100k.csv              # 100,000건 샘플 데이터
 │   ├── seoul-bike-sample-preview.csv           # 미리보기용 50건
 │   └── data-dictionary.md                      # 데이터 사전
-├── job-templates/                              # EMR Job 템플릿 (실행 시 생성)
-├── pod-templates/                              # Pod 템플릿 (실행 시 생성)
 ├── docs/                                       # 문서
 └── results/                                    # 분석 결과 (실행 후 생성)
 ```
@@ -348,14 +322,14 @@ S3-Tables-LakeFormation-with-EMRonEKS/
 ### 🎯 고유 리소스 생성
 - **S3 버킷**: `seoul-bike-iceberg-{ACCOUNT_ID}-{TIMESTAMP}` 형식으로 자동 생성
 - **IAM 역할**: 계정별로 독립적으로 생성
-- **EKS 클러스터**: 사용자별 고유한 클러스터명 사용
+- **EMR Serverless 애플리케이션**: 사용자별 고유한 애플리케이션명 사용
 
 ### 📁 환경 설정 관리
 - **`.env` 파일**: 첫 번째 스크립트 실행 시 자동 생성
 - **자동 설정 공유**: 모든 스크립트가 `.env` 파일의 설정을 자동으로 사용
 - **충돌 방지**: 다른 사용자와 리소스명 충돌 없음
 
-## 🎯 예상 결과
+## 🎯 예상 결과 (EMR Serverless)
 
 ### Data Steward Role
 - 총 대여 건수: **100,000건**
@@ -381,79 +355,88 @@ S3-Tables-LakeFormation-with-EMRonEKS/
 - 접근 가능 연령대: **20-30대만**
 - 분석 범위: **타겟 마케팅 분석**
 
-## 🔑 핵심 학습 포인트
+## 🔑 핵심 학습 포인트 (EMR Serverless)
 
-### 1. Multi-dimensional FGAC
+### 1. EMR Serverless vs EMR on EKS 비교
+- **인프라 관리**: EMR Serverless는 완전 관리형, EMR on EKS는 Kubernetes 기반
+- **스케일링**: EMR Serverless는 자동, EMR on EKS는 Karpenter 기반
+- **비용**: EMR Serverless는 사용량 기반, EMR on EKS는 클러스터 기반
+- **Lake Formation 지원**: 두 환경 모두 동일한 FGAC 기능 제공
+
+### 2. Multi-dimensional FGAC
 - **Row-level**: 지역별 필터링 (강남구)
 - **Column-level**: 역할별 컬럼 접근 제어
 - **Cell-level**: 연령대별 세밀한 필터링 (20-30대)
 
-### 2. 실제 비즈니스 시나리오
+### 3. 실제 비즈니스 시나리오
 - 데이터 관리자의 전체 데이터 거버넌스
 - 지역별 분석가의 제한된 분석
 - 운영팀의 운영 데이터 접근
 - 마케팅 파트너의 타겟 고객 분석
 
-### 3. 확장 가능한 아키텍처
-- EMR on EKS의 Kubernetes 기반 확장성
-- S3 Tables의 Apache Iceberg 최적화
-- Lake Formation의 중앙집중식 권한 관리
+### 4. 서버리스 아키텍처 장점
+- **운영 부담 감소**: 인프라 관리 불필요
+- **비용 효율성**: 사용한 만큼만 과금
+- **자동 스케일링**: 워크로드에 따른 자동 조정
+- **빠른 시작**: 클러스터 프로비저닝 시간 단축
 
-### 4. 실제 데이터 활용
-- **100,000건**의 실제 서울시 자전거 대여 데이터
-- 다양한 구별 분포 (강서구 13.2% ~ 기타 구)
-- 현실적인 대여 시간 분포 (평균 16.9분)
-- 실제 이동 거리 패턴 (평균 1.8km)
-
-## 🛠️ 기술 스택
+## 🛠️ 기술 스택 (EMR Serverless)
 
 - **AWS Lake Formation**: Fine-Grained Access Control
 - **Amazon S3**: Apache Iceberg 기반 데이터 레이크
 - **AWS Glue Catalog**: 메타데이터 관리
-- **Amazon EMR on EKS**: Kubernetes 기반 Spark 분석
+- **Amazon EMR Serverless**: 서버리스 Spark 분석 (메인)
+- **Amazon EMR on EKS**: Kubernetes 기반 Spark 분석 (비교용)
 - **Apache Spark**: 대규모 데이터 처리
 - **Apache Iceberg**: 테이블 형식 및 스키마 진화
 - **Python**: 데이터 분석 및 시각화
-- **Karpenter**: EKS 노드 자동 스케일링
 
-## 🔍 문제 해결
+## 🔍 문제 해결 (EMR Serverless)
 
 ### 일반적인 문제들
 
-#### 1. `.env` 파일 관련
+#### 1. EMR Serverless 애플리케이션 생성 실패
 ```bash
-# .env 파일이 없는 경우
-./scripts/01-create-s3-bucket.sh
+# 애플리케이션 상태 확인
+aws emr-serverless get-application --application-id {APPLICATION_ID}
 
-# .env 파일 내용 확인
-cat .env
+# 애플리케이션 재시작
+aws emr-serverless start-application --application-id {APPLICATION_ID}
 ```
 
-#### 2. AWS 권한 관련
+#### 2. Lake Formation 권한 문제
 ```bash
-# 현재 사용자 확인
-aws sts get-caller-identity
+# Lake Formation 권한 확인
+aws lakeformation list-permissions --region ap-northeast-2
 
-# 필요한 권한: S3, Glue, Lake Formation, EMR, EKS, IAM
+# Hybrid Access Mode 확인
+aws lakeformation describe-resource --resource-arn "arn:aws:s3:::버킷명"
 ```
 
-#### 3. Job 실행 상태 확인
+#### 3. IAM 역할 Trust Policy 문제
 ```bash
-# Virtual Cluster ID 확인
-source .env
-echo $LF_VIRTUAL_CLUSTER_ID
+# 역할 Trust Policy 확인
+aws iam get-role --role-name LF_GangnamAnalyticsRole
 
+# EMR Serverless 서비스 포함 여부 확인
+```
+
+#### 4. Job 실행 상태 확인
+```bash
 # Job 목록 확인
-aws emr-containers list-job-runs --virtual-cluster-id $LF_VIRTUAL_CLUSTER_ID
+aws emr-serverless list-job-runs --application-id {APPLICATION_ID}
+
+# Job 상세 정보
+aws emr-serverless get-job-run --application-id {APPLICATION_ID} --job-run-id {JOB_RUN_ID}
 ```
 
-## 📚 추가 리소스
+## 📚 추가 리소스 (EMR Serverless)
 
+- [AWS EMR Serverless 사용자 가이드](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/)
+- [EMR Serverless Lake Formation 통합](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/emr-serverless-lf-enable.html)
 - [AWS Lake Formation 개발자 가이드](https://docs.aws.amazon.com/lake-formation/)
-- [EMR on EKS 사용자 가이드](https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/)
 - [AWS Glue Catalog 문서](https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html)
 - [Apache Iceberg 문서](https://iceberg.apache.org/)
-- [Data on EKS Blueprint](https://awslabs.github.io/data-on-eks/)
 
 ## 🤝 기여
 
@@ -468,3 +451,8 @@ aws emr-containers list-job-runs --virtual-cluster-id $LF_VIRTUAL_CLUSTER_ID
 **⚠️ 주의사항**: 이 데모는 교육 목적으로 제작되었습니다. 프로덕션 환경에서 사용하기 전에 보안 검토를 수행하세요.
 
 **📊 데이터 출처**: 이 프로젝트에서 사용된 데이터는 실제 서울시 따릉이 자전거 대여 데이터를 기반으로 하되, 개인정보 보호를 위해 익명화 및 가공 처리되었습니다.
+
+**🔄 EMR on EKS vs EMR Serverless**: 
+- EMR on EKS 버전은 `README.md` 참조
+- EMR Serverless 버전은 이 파일(`README-serverless.md`) 참조
+- 두 환경 모두 동일한 Lake Formation FGAC 기능을 제공하며, 권한 문제 해결을 위한 비교 분석이 가능합니다.

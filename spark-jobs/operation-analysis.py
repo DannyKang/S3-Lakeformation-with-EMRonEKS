@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Operation Analysis - 운영 데이터 분석
-Lake Formation FGAC 데모용 - 전체 구 운영 데이터 (개인정보 제외)
+Operation Analysis - 운영팀 분석
+Lake Formation FGAC 데모용 - 운영 관련 데이터만 접근 (개인정보 birth_year, gender 제외)
 """
 
 from pyspark.sql import SparkSession
@@ -10,141 +10,171 @@ from pyspark.sql.types import *
 import sys
 
 def create_spark_session():
-    """Iceberg 지원 Spark 세션 생성"""
+    """Lake Formation FGAC 지원 Spark 세션 생성"""
     return SparkSession.builder \
-        .appName("Operation-SystemAccess-Analysis") \
+        .appName("Operation-SystemAnalysis") \
         .getOrCreate()
 
 def main():
     print("=== Operation Analysis 시작 ===")
-    print("역할: 운영팀 - 전체 구 운영 데이터 (개인정보 제외)")
+    print("역할: 운영팀 - 시스템 운영 최적화 (개인정보 제외)")
     
     spark = create_spark_session()
     
     try:
-        # Glue 카탈로그에서 Iceberg 테이블 데이터 읽기
-        print("\n1. Glue 카탈로그에서 데이터 로드 중...")
-        namespace = 'bike_db'
-        table_name = 'bike_rental_data'
+        # Lake Formation FGAC를 통해 데이터 읽기
+        print("\n1. Lake Formation FGAC를 통해 데이터 로드 중...")
+        namespace = "bike_db"
+        table_name = "bike_rental_data"
         
         print(f"   네임스페이스: {namespace}")
         print(f"   테이블명: {table_name}")
+        print(f"   카탈로그: glue_catalog.{namespace}.{table_name}")
         
-        df = spark.table(f"{namespace}.{table_name}")
+        # Glue 카탈로그를 통해 데이터 읽기
+        df = spark.read.table(f"glue_catalog.{namespace}.{table_name}")
         
         total_records = df.count()
         print(f"✅ Lake Formation 필터링 후 레코드 수: {total_records:,}건")
-        print("🔒 접근 제한: 개인정보(birth_year, gender) 제외")
+        print("🔒 접근 제한: 개인정보 birth_year, gender 제외")
         
-        # 데이터 스키마 확인 (접근 가능한 컬럼만)
+        # 데이터 스키마 확인
         print("\n2. 접근 가능한 데이터 스키마:")
         df.printSchema()
         
+        # 기본 운영 통계
+        print(f"\n3. 기본 운영 통계:")
+        print(f"   • 총 대여 건수: {total_records:,}")
+        print(f"   • 고유 대여 ID: {df.select('rental_id').distinct().count():,}")
+        print(f"   • 운영 정거장 수: {df.select('station_id').distinct().count():,}")
+        print(f"   • 서비스 구역 수: {df.select('district').distinct().count()}")
+        
         # 구별 운영 현황
-        print(f"\n3. 구별 운영 현황:")
-        district_ops = df.groupBy("district") \
-                         .agg(count("*").alias("총_이용횟수"),
-                              countDistinct("station_id").alias("정거장_수"),
-                              avg("usage_min").alias("평균_이용시간"),
-                              avg("distance_meter").alias("평균_이동거리")) \
-                         .orderBy(desc("총_이용횟수"))
+        print(f"\n4. 구별 운영 현황:")
+        district_operations = df.groupBy("district") \
+                                .agg(count("*").alias("total_rentals"),
+                                     countDistinct("station_id").alias("station_count"),
+                                     avg("usage_min").alias("avg_usage"),
+                                     avg("distance_meter").alias("avg_distance")) \
+                                .orderBy(desc("total_rentals"))
         
-        district_ops.show(truncate=False)
+        district_operations.show(truncate=False)
         
-        # 정거장별 운영 효율성 분석
-        print(f"\n4. 정거장별 운영 효율성 (상위 20개):")
+        # 정거장별 운영 효율성 (상위 15개)
+        print(f"\n5. 정거장별 운영 효율성 (상위 15개):")
         station_efficiency = df.groupBy("station_id", "station_name", "district") \
-                               .agg(count("*").alias("이용횟수"),
-                                    avg("usage_min").alias("평균_이용시간"),
-                                    avg("distance_meter").alias("평균_이동거리"),
-                                    min("usage_min").alias("최소_이용시간"),
-                                    max("usage_min").alias("최대_이용시간")) \
-                               .orderBy(desc("이용횟수")) \
-                               .limit(20)
+                               .agg(count("*").alias("total_rentals"),
+                                    avg("usage_min").alias("avg_usage_min"),
+                                    avg("distance_meter").alias("avg_distance_m"),
+                                    min("rental_date").alias("first_rental"),
+                                    max("rental_date").alias("last_rental")) \
+                               .orderBy(desc("total_rentals")) \
+                               .limit(15)
         
         station_efficiency.show(truncate=False)
         
         # 시간대별 운영 부하 분석
-        print(f"\n5. 시간대별 운영 부하:")
+        print(f"\n6. 시간대별 운영 부하 분석:")
         hourly_load = df.withColumn("hour", hour("rental_date")) \
                         .groupBy("hour") \
-                        .agg(count("*").alias("이용횟수"),
-                             avg("usage_min").alias("평균_이용시간"),
-                             countDistinct("station_id").alias("활성_정거장수")) \
+                        .agg(count("*").alias("rental_count"),
+                             avg("usage_min").alias("avg_usage"),
+                             countDistinct("station_id").alias("active_stations")) \
                         .orderBy("hour")
         
         hourly_load.show(24)
         
-        # 요일별 운영 패턴
-        print(f"\n6. 요일별 운영 패턴:")
-        weekday_ops = df.withColumn("weekday", date_format("rental_date", "EEEE")) \
-                        .groupBy("weekday") \
-                        .agg(count("*").alias("이용횟수"),
-                             countDistinct("station_id").alias("활성_정거장수"),
-                             avg("usage_min").alias("평균_이용시간"),
-                             avg("distance_meter").alias("평균_이동거리")) \
-                        .orderBy(desc("이용횟수"))
-        
-        weekday_ops.show()
-        
-        # 이용 시간 분포 (운영 최적화용)
-        print(f"\n7. 이용 시간 분포 분석:")
-        usage_distribution = df.withColumn("usage_category",
-                                         when(col("usage_min") <= 5, "단거리(≤5분)")
-                                         .when(col("usage_min") <= 15, "중거리(6-15분)")
-                                         .when(col("usage_min") <= 30, "장거리(16-30분)")
-                                         .when(col("usage_min") <= 60, "초장거리(31-60분)")
-                                         .otherwise("특수(>60분)")) \
-                              .groupBy("usage_category") \
-                              .agg(count("*").alias("이용횟수"),
-                                   avg("distance_meter").alias("평균_이동거리")) \
-                              .orderBy(desc("이용횟수"))
+        # 대여 시간 분포 (운영 최적화용)
+        print(f"\n7. 대여 시간 분포 (운영 최적화용):")
+        usage_distribution = df.select(
+            avg("usage_min").alias("평균_대여시간"),
+            min("usage_min").alias("최소_대여시간"),
+            max("usage_min").alias("최대_대여시간"),
+            expr("percentile_approx(usage_min, 0.25)").alias("25%_대여시간"),
+            expr("percentile_approx(usage_min, 0.5)").alias("중앙값_대여시간"),
+            expr("percentile_approx(usage_min, 0.75)").alias("75%_대여시간"),
+            expr("percentile_approx(usage_min, 0.95)").alias("95%_대여시간")
+        )
         
         usage_distribution.show()
         
-        # 이동 거리 분포 (자전거 재배치 계획용)
-        print(f"\n8. 이동 거리 분포 분석:")
-        distance_distribution = df.withColumn("distance_category",
-                                            when(col("distance_meter") <= 500, "근거리(≤500m)")
-                                            .when(col("distance_meter") <= 1500, "중거리(501-1500m)")
-                                            .when(col("distance_meter") <= 3000, "장거리(1501-3000m)")
-                                            .when(col("distance_meter") <= 5000, "초장거리(3001-5000m)")
-                                            .otherwise("특수(>5000m)")) \
-                                 .groupBy("distance_category") \
-                                 .agg(count("*").alias("이용횟수"),
-                                      avg("usage_min").alias("평균_이용시간")) \
-                                 .orderBy(desc("이용횟수"))
+        # 이동 거리 분포 (서비스 범위 최적화)
+        print(f"\n8. 이동 거리 분포 (서비스 범위 최적화):")
+        distance_distribution = df.select(
+            avg("distance_meter").alias("평균_이동거리"),
+            min("distance_meter").alias("최소_이동거리"),
+            max("distance_meter").alias("최대_이동거리"),
+            expr("percentile_approx(distance_meter, 0.25)").alias("25%_이동거리"),
+            expr("percentile_approx(distance_meter, 0.5)").alias("중앙값_이동거리"),
+            expr("percentile_approx(distance_meter, 0.75)").alias("75%_이동거리"),
+            expr("percentile_approx(distance_meter, 0.95)").alias("95%_이동거리")
+        )
         
         distance_distribution.show()
         
-        # 정거장 이용률 분석 (재배치 우선순위)
-        print(f"\n9. 정거장 이용률 분석 (하위 10개 - 재배치 필요):")
-        low_usage_stations = df.groupBy("station_id", "station_name", "district") \
-                               .agg(count("*").alias("이용횟수"),
-                                    avg("usage_min").alias("평균_이용시간")) \
-                               .orderBy("이용횟수") \
-                               .limit(10)
+        # 사용자 유형별 운영 패턴
+        print(f"\n9. 사용자 유형별 운영 패턴:")
+        user_type_operations = df.groupBy("user_type") \
+                                 .agg(count("*").alias("rental_count"),
+                                      avg("usage_min").alias("avg_usage"),
+                                      avg("distance_meter").alias("avg_distance"),
+                                      countDistinct("station_id").alias("station_usage")) \
+                                 .orderBy(desc("rental_count"))
         
-        low_usage_stations.show(truncate=False)
+        user_type_operations.show()
         
-        # 시스템 성능 지표
-        print(f"\n10. 시스템 성능 지표:")
-        performance_metrics = df.agg(
-            count("*").alias("총_이용횟수"),
-            countDistinct("station_id").alias("총_정거장수"),
-            countDistinct("district").alias("서비스_구수"),
-            avg("usage_min").alias("평균_이용시간"),
-            avg("distance_meter").alias("평균_이동거리"),
-            expr("percentile_approx(usage_min, 0.95)").alias("95퍼센타일_이용시간"),
-            expr("percentile_approx(distance_meter, 0.95)").alias("95퍼센타일_이동거리")
+        # 요일별 운영 패턴
+        print(f"\n10. 요일별 운영 패턴:")
+        weekday_operations = df.withColumn("weekday", date_format("rental_date", "EEEE")) \
+                               .withColumn("day_of_week", dayofweek("rental_date")) \
+                               .groupBy("day_of_week", "weekday") \
+                               .agg(count("*").alias("rental_count"),
+                                    avg("usage_min").alias("avg_usage"),
+                                    countDistinct("station_id").alias("active_stations")) \
+                               .orderBy("day_of_week")
+        
+        weekday_operations.show()
+        
+        # 운영 이상치 탐지
+        print(f"\n11. 운영 이상치 탐지:")
+        operational_outliers = df.filter(
+            (col("usage_min") > 480) |  # 8시간 이상 대여
+            (col("distance_meter") > 30000) |  # 30km 이상 이동
+            (col("usage_min") < 1) |  # 1분 미만 대여
+            (col("distance_meter") < 10)  # 10m 미만 이동
         )
         
-        performance_metrics.show()
+        outlier_count = operational_outliers.count()
+        print(f"운영 이상치 개수: {outlier_count:,}건 ({(outlier_count/total_records)*100:.2f}%)")
+        
+        if outlier_count > 0:
+            print("운영 이상치 샘플 (상위 5건):")
+            operational_outliers.select("rental_id", "station_name", "usage_min", "distance_meter", "district") \
+                                .orderBy(desc("usage_min")) \
+                                .show(5, truncate=False)
+        
+        # 시스템 성능 지표
+        print(f"\n12. 시스템 성능 지표:")
+        
+        # 평균 회전율 (정거장당 일일 대여 건수)
+        daily_turnover = total_records / df.select("station_id").distinct().count()
+        print(f"   • 정거장 평균 회전율: {daily_turnover:.1f}건/정거장")
+        
+        # 평균 이용 효율성
+        avg_efficiency = df.agg(avg(col("distance_meter") / col("usage_min"))).collect()[0][0]
+        print(f"   • 평균 이용 효율성: {avg_efficiency:.1f}m/분")
+        
+        # 서비스 커버리지
+        total_stations = df.select("station_id").distinct().count()
+        active_stations = df.filter(col("usage_min") > 0).select("station_id").distinct().count()
+        coverage = (active_stations / total_stations) * 100
+        print(f"   • 서비스 커버리지: {coverage:.1f}% ({active_stations}/{total_stations} 정거장)")
         
         print(f"\n=== Operation Analysis 완료 ===")
-        print(f"✅ 분석 완료: {total_records:,}건 (전체 구)")
-        print(f"🔒 권한: 운영 데이터만 접근 (개인정보 제외)")
+        print(f"✅ 분석 완료: {total_records:,}건")
+        print(f"🔒 권한: Lake Formation FGAC 적용 (개인정보 birth_year, gender 제외)")
         print(f"📊 역할: 시스템 운영 최적화 및 정거장 관리")
+        print(f"🗂️ 카탈로그: Glue Catalog (Apache Iceberg)")
         
     except Exception as e:
         print(f"❌ 오류 발생: {e}")
